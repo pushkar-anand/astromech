@@ -1,13 +1,13 @@
 package llm
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"iter"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -60,20 +60,13 @@ const (
 // Client sends requests to one server. A Client is safe for concurrent use
 // by multiple goroutines.
 //
-// Requests go through the official OpenAI Go SDK, which reads OPENAI_*
-// environment variables into every client it makes. That suits a program
-// that talks only to OpenAI and leaks into one that talks to anything else,
-// so the base URL and key are always the ones given to [New], and the
-// organization, project and custom headers the environment names are removed
-// from every request.
+// Requests go through the official OpenAI Go SDK. Its services are built
+// directly, which skips the OPENAI_* environment variables openai.NewClient
+// reads into every client: a key, organization or custom header meant for
+// OpenAI or a gateway never reaches the server the client talks to.
 type Client struct {
-	sdk    openai.Client
-	header http.Header
+	chat   openai.ChatCompletionService
 	compat Compat
-
-	// envHeaders are the headers the SDK adds from the environment, removed
-	// from every request.
-	envHeaders []string
 }
 
 // Option configures a [Client].
@@ -138,29 +131,25 @@ func New(baseURL string, opts ...Option) (*Client, error) {
 		opt(&cfg)
 	}
 
-	c := &Client{
-		header:     cfg.header,
-		compat:     cfg.compat,
-		envHeaders: envHeaderNames(),
-	}
-
+	// An empty key sends no Authorization header.
 	sdkOpts := []option.RequestOption{
-		// Set explicitly so OPENAI_BASE_URL and OPENAI_API_KEY in the
-		// environment never redirect a request or ride along to another
-		// server. An empty key sends no Authorization header.
 		option.WithBaseURL(strings.TrimRight(baseURL, "/") + "/"),
 		option.WithAPIKey(cfg.apiKey),
+		option.WithHTTPClient(cmp.Or(cfg.httpClient, &http.Client{})),
 		option.WithMaxRetries(cfg.maxRetries),
-		option.WithMiddleware(c.scrub),
+		option.WithMiddleware(scrub),
 	}
 
-	if cfg.httpClient != nil {
-		sdkOpts = append(sdkOpts, option.WithHTTPClient(cfg.httpClient))
+	for name, values := range cfg.header {
+		for _, v := range values {
+			sdkOpts = append(sdkOpts, option.WithHeaderAdd(name, v))
+		}
 	}
 
-	c.sdk = openai.NewClient(sdkOpts...)
-
-	return c, nil
+	return &Client{
+		chat:   openai.NewChatCompletionService(sdkOpts...),
+		compat: cfg.compat,
+	}, nil
 }
 
 // Complete sends req and waits for the whole reply.
@@ -172,7 +161,7 @@ func (c *Client) Complete(ctx context.Context, req Request) (*Response, error) {
 
 	var att attempts
 
-	completion, err := c.sdk.Chat.Completions.New(ctx, p, option.WithMiddleware(att.track))
+	completion, err := c.chat.New(ctx, p, option.WithMiddleware(att.track))
 	if err != nil {
 		return nil, att.explain(ctx, err)
 	}
@@ -220,7 +209,7 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 
 		att := attempts{onRetry: func(r Retrying) { emit(r) }}
 
-		stream := c.sdk.Chat.Completions.NewStreaming(ctx, p, option.WithMiddleware(att.track))
+		stream := c.chat.NewStreaming(ctx, p, option.WithMiddleware(att.track))
 		defer stream.Close()
 
 		var a assembler
@@ -266,19 +255,4 @@ func (a *attempts) explainStream(ctx context.Context, err error) error {
 	}
 
 	return a.explain(ctx, err)
-}
-
-// envHeaderNames returns the headers the SDK adds to every request from
-// the environment: the OpenAI organization and project, and each header
-// OPENAI_CUSTOM_HEADERS lists, one "Name: value" per line.
-func envHeaderNames() []string {
-	names := []string{"OpenAI-Organization", "OpenAI-Project"}
-
-	for line := range strings.SplitSeq(os.Getenv("OPENAI_CUSTOM_HEADERS"), "\n") {
-		if name, _, ok := strings.Cut(line, ":"); ok && strings.TrimSpace(name) != "" {
-			names = append(names, strings.TrimSpace(name))
-		}
-	}
-
-	return names
 }

@@ -14,25 +14,14 @@ import (
 	"github.com/openai/openai-go/v3/option"
 )
 
-// scrub removes from a request the headers the client did not ask for: the
-// ones the SDK reads from the environment, and the SDK's X-Stainless-*
-// headers, which report the host's operating system, architecture and Go
-// version to whichever server the client talks to.
-func (c *Client) scrub(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-	for _, name := range c.envHeaders {
-		req.Header.Del(name)
-	}
-
+// scrub removes the SDK's X-Stainless-* headers, which report the host's
+// operating system, architecture and Go version to whichever server the
+// client talks to.
+func scrub(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 	for name := range req.Header {
 		if strings.HasPrefix(name, "X-Stainless-") {
 			req.Header.Del(name)
 		}
-	}
-
-	// The client's own headers win over anything removed above that shares
-	// their name.
-	for name, values := range c.header {
-		req.Header[name] = values
 	}
 
 	return next(req)
