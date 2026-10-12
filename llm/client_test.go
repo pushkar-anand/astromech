@@ -232,6 +232,22 @@ func TestStreamToleratesLocalServerToolCalls(t *testing.T) {
 				{"index": 0, "id": "call_y", "function": map[string]any{"name": "lights_on", "arguments": `{"room":"hall"}`}},
 			},
 		},
+		{
+			name: "every call at index 0, arguments in pieces",
+			calls: []map[string]any{
+				{"index": 0, "id": "call_x", "function": map[string]any{"name": "lights_on", "arguments": `{"room":`}},
+				{"index": 0, "function": map[string]any{"arguments": `"bedroom"}`}},
+				{"index": 0, "id": "call_y", "function": map[string]any{"name": "lights_on", "arguments": `{"room":`}},
+				{"index": 0, "function": map[string]any{"arguments": `"hall"}`}},
+			},
+		},
+		{
+			name: "indexes out of range",
+			calls: []map[string]any{
+				{"index": -1, "function": map[string]any{"name": "lights_on", "arguments": `{"room":"bedroom"}`}},
+				{"index": 2000000000, "function": map[string]any{"name": "lights_on", "arguments": `{"room":"hall"}`}},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -499,4 +515,146 @@ func TestDecodeArgumentsNamesTheTool(t *testing.T) {
 	err := llm.ToolCall{Name: "get_device", Arguments: `{"id":`}.DecodeArguments(&v)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "get_device")
+}
+
+func TestToolCallEventsNumberCallsInReplyOrder(t *testing.T) {
+	srv := llmtest.NewServer(t)
+	srv.Enqueue(llmtest.Reply{Raw: llmtest.SSE(
+		chunk(map[string]any{"tool_calls": []map[string]any{{"index": 1, "id": "call_a", "function": map[string]any{"name": "get_device", "arguments": `{"id":42}`}}}}, nil),
+		chunk(map[string]any{"tool_calls": []map[string]any{{"index": 3, "id": "call_b", "function": map[string]any{"name": "get_device", "arguments": `{"id":7}`}}}}, nil),
+		chunk(map[string]any{}, "tool_calls"),
+		"[DONE]",
+	)})
+
+	var started, deltas, done []int
+
+	for _, e := range collect(t, newClient(t, srv), ask("which devices?")) {
+		switch e := e.(type) {
+		case llm.ToolCallStarted:
+			started = append(started, e.Index)
+		case llm.ToolCallDelta:
+			deltas = append(deltas, e.Index)
+		case llm.ToolCallDone:
+			done = append(done, e.Index)
+		}
+	}
+
+	assert.Equal(t, []int{0, 1}, started)
+	assert.Equal(t, []int{0, 1}, deltas)
+	assert.Equal(t, []int{0, 1}, done)
+}
+
+func TestStreamTakesAWholeReply(t *testing.T) {
+	srv := llmtest.NewServer(t)
+	srv.Enqueue(llmtest.Reply{
+		Whole:     true,
+		Text:      "Turning the lights on.",
+		ToolCalls: []llm.ToolCall{{ID: "call_a", Name: "lights_on", Arguments: `{"room":"hall"}`}},
+		Usage:     llm.Usage{InputTokens: 12, OutputTokens: 6},
+	})
+
+	events := collect(t, newClient(t, srv), ask("lights on"))
+
+	assert.Contains(t, events, llm.TextDelta{Text: "Turning the lights on."})
+	assert.Contains(t, events, llm.ToolCallStarted{Index: 0, ID: "call_a", Name: "lights_on"})
+
+	done, ok := last(t, events).(llm.Done)
+	require.True(t, ok, "got %#v", last(t, events))
+	assert.Equal(t, "Turning the lights on.", done.Response.Message.Content)
+	assert.Equal(t, []llm.ToolCall{{ID: "call_a", Name: "lights_on", Arguments: `{"room":"hall"}`}}, done.Response.Message.ToolCalls)
+	assert.Equal(t, llm.StopToolCalls, done.Response.Stop)
+	assert.Equal(t, llm.Usage{InputTokens: 12, OutputTokens: 6}, done.Response.Usage)
+}
+
+func TestAnErrorInsideA200TakesTheStatusItsCodeNames(t *testing.T) {
+	t.Run("in place of a reply", func(t *testing.T) {
+		srv := llmtest.NewServer(t)
+		srv.Enqueue(llmtest.Reply{Raw: `{"id":"gen-1","error":{"message":"upstream provider failed","code":502}}`})
+
+		_, err := newClient(t, srv).Complete(t.Context(), ask("status?"))
+
+		apiErr, ok := errors.AsType[*llm.APIError](err)
+		require.True(t, ok, "got %v", err)
+		assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+		assert.Equal(t, "upstream provider failed", apiErr.Message)
+		assert.True(t, llm.IsRetryable(err))
+	})
+
+	t.Run("in a stream", func(t *testing.T) {
+		srv := llmtest.NewServer(t)
+		srv.Enqueue(llmtest.Reply{Raw: llmtest.SSE(
+			map[string]any{"error": map[string]any{"message": "This model's maximum context length is 8192 tokens", "code": "context_length_exceeded"}},
+		)})
+
+		_, err := llm.Collect(newClient(t, srv).Stream(t.Context(), ask("status?")))
+
+		apiErr, ok := errors.AsType[*llm.APIError](err)
+		require.True(t, ok, "got %v", err)
+		assert.Zero(t, apiErr.StatusCode, "a code that is not a status names none")
+		assert.True(t, llm.IsContextOverflow(err))
+	})
+
+	t.Run("no error and no reply", func(t *testing.T) {
+		srv := llmtest.NewServer(t)
+		srv.Enqueue(llmtest.Reply{Raw: `{"id":"gen-1","choices":[]}`})
+
+		_, err := newClient(t, srv).Complete(t.Context(), ask("status?"))
+		require.ErrorIs(t, err, llm.ErrEmptyResponse)
+	})
+}
+
+func TestPartialReplyLeavesOutUnfinishedToolCalls(t *testing.T) {
+	call := map[string]any{"tool_calls": []map[string]any{{"index": 0, "function": map[string]any{"name": "lights_on", "arguments": `{"room":`}}}}
+
+	t.Run("with text", func(t *testing.T) {
+		srv := llmtest.NewServer(t)
+		srv.Enqueue(llmtest.Reply{Raw: llmtest.SSE(chunk(map[string]any{"content": "Checking the hall."}, nil), chunk(call, nil))})
+
+		resp, err := llm.Collect(newClient(t, srv).Stream(t.Context(), ask("lights on")))
+		require.ErrorIs(t, err, llm.ErrIncompleteStream)
+		require.NotNil(t, resp)
+		assert.Equal(t, "Checking the hall.", resp.Message.Content)
+		assert.Empty(t, resp.Message.ToolCalls)
+	})
+
+	t.Run("with only a tool call", func(t *testing.T) {
+		srv := llmtest.NewServer(t)
+		srv.Enqueue(llmtest.Reply{Raw: llmtest.SSE(chunk(call, nil))})
+
+		failed, ok := last(t, collect(t, newClient(t, srv), ask("lights on"))).(llm.Failed)
+		require.True(t, ok)
+		assert.Nil(t, failed.Partial)
+	})
+}
+
+func TestAssistantMessagesAreSentTheWayServersAccept(t *testing.T) {
+	srv := llmtest.NewServer(t)
+	srv.Enqueue(llmtest.Text("Done."))
+
+	req := ask("lights on")
+	req.Messages = append(req.Messages,
+		llm.Message{Role: llm.RoleAssistant, Reasoning: "The user wants light."},
+		llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call_a", Name: "lights_on", Arguments: "  "}}},
+		llm.ToolResult(llm.ToolCall{ID: "call_a", Name: "lights_on"}, "on"),
+	)
+
+	_, err := newClient(t, srv).Complete(t.Context(), req)
+	require.NoError(t, err)
+
+	var body struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	require.NoError(t, srv.Requests()[0].Decode(&body))
+	require.Len(t, body.Messages, 4)
+
+	content, ok := body.Messages[1]["content"]
+	assert.True(t, ok, "a message with neither text nor calls still sends content")
+	assert.Equal(t, "", content)
+
+	assert.NotContains(t, body.Messages[2], "content", "a message that only calls tools leaves content out")
+
+	calls, _ := body.Messages[2]["tool_calls"].([]any)
+	require.Len(t, calls, 1)
+	fn, _ := calls[0].(map[string]any)["function"].(map[string]any)
+	assert.Equal(t, "{}", fn["arguments"])
 }

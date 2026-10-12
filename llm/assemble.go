@@ -18,7 +18,11 @@ type assembler struct {
 
 	text      strings.Builder
 	reasoning strings.Builder
-	calls     []*pendingCall
+
+	// calls holds the reply's tool calls in the order they started, and
+	// slots maps the index a server gave a call to its place in calls.
+	calls []*pendingCall
+	slots map[int64]int
 
 	finishReason string
 	finished     bool
@@ -80,17 +84,10 @@ func (a *assembler) add(chunk openai.ChatCompletionChunk, emit func(Event) bool)
 }
 
 func (a *assembler) addCall(tc openai.ChatCompletionChunkChoiceDeltaToolCall, emit func(Event) bool) bool {
-	i := a.callIndex(tc)
-
-	for len(a.calls) <= i {
-		a.calls = append(a.calls, nil)
-	}
-
+	i, started := a.callIndex(tc)
 	call := a.calls[i]
-	if call == nil {
-		call = &pendingCall{id: tc.ID, name: tc.Function.Name}
-		a.calls[i] = call
 
+	if started {
 		if !emit(ToolCallStarted{Index: i, ID: call.id, Name: call.name}) {
 			return false
 		}
@@ -109,27 +106,40 @@ func (a *assembler) addCall(tc openai.ChatCompletionChunkChoiceDeltaToolCall, em
 	return emit(ToolCallDelta{Index: i, Arguments: args})
 }
 
-// callIndex places a tool call delta among the reply's calls. Servers that
-// leave the index out send each call whole, and some local servers send
-// every call at index 0; a new ID at an index already taken marks a new
-// call in both cases.
-func (a *assembler) callIndex(tc openai.ChatCompletionChunkChoiceDeltaToolCall) int {
-	if !tc.JSON.Index.Valid() {
-		return len(a.calls)
+// callIndex places a tool call delta among the reply's calls, starting a
+// new call when the delta begins one, and reports whether it did. Servers
+// that leave the index out send each call whole. Some local servers send
+// every call at index 0: a new ID there starts a new call, and the pieces
+// that follow without an ID belong to it. The server's index only names a
+// call, so an index far out of order or below 0 costs nothing.
+func (a *assembler) callIndex(tc openai.ChatCompletionChunkChoiceDeltaToolCall) (int, bool) {
+	if tc.JSON.Index.Valid() {
+		if i, ok := a.slots[tc.Index]; ok {
+			id := a.calls[i].id
+			if tc.ID == "" || id == "" || id == tc.ID {
+				return i, false
+			}
+		}
 	}
 
-	i := int(tc.Index)
-	if i < len(a.calls) && a.calls[i] != nil && tc.ID != "" && a.calls[i].id != "" && a.calls[i].id != tc.ID {
-		return len(a.calls)
+	i := len(a.calls)
+	a.calls = append(a.calls, &pendingCall{id: tc.ID, name: tc.Function.Name})
+
+	if tc.JSON.Index.Valid() {
+		if a.slots == nil {
+			a.slots = make(map[int64]int)
+		}
+
+		a.slots[tc.Index] = i
 	}
 
-	return i
+	return i, true
 }
 
 // finish emits each tool call as done and returns the reply. It returns
 // false once emit does.
 func (a *assembler) finish(emit func(Event) bool) (*Response, bool) {
-	resp := a.response(stopReason(a.finishReason, a.callCount()))
+	resp := a.response(stopReason(a.finishReason, len(a.calls)))
 
 	for i, call := range resp.Message.ToolCalls {
 		if !emit(ToolCallDone{Index: i, Call: call}) {
@@ -140,10 +150,12 @@ func (a *assembler) finish(emit func(Event) bool) (*Response, bool) {
 	return resp, true
 }
 
-// partial returns what arrived before a stream failed, or nil when nothing
-// did.
+// partial returns the text and reasoning that arrived before a stream
+// failed, or nil when none did. Tool calls are left out: their arguments
+// can be cut off, and a server refuses a conversation that holds a call
+// with no result.
 func (a *assembler) partial(ctx context.Context) *Response {
-	if a.id == "" && a.text.Len() == 0 && a.reasoning.Len() == 0 && len(a.calls) == 0 {
+	if a.text.Len() == 0 && a.reasoning.Len() == 0 {
 		return nil
 	}
 
@@ -152,7 +164,10 @@ func (a *assembler) partial(ctx context.Context) *Response {
 		stop = StopCanceled
 	}
 
-	return a.response(stop)
+	resp := a.response(stop)
+	resp.Message.ToolCalls = nil
+
+	return resp
 }
 
 func (a *assembler) response(stop StopReason) *Response {
@@ -163,26 +178,49 @@ func (a *assembler) response(stop StopReason) *Response {
 	}
 
 	for _, call := range a.calls {
-		if call == nil {
-			continue
-		}
-
 		msg.ToolCalls = append(msg.ToolCalls, completeCall(call.id, call.name, call.args.String()))
 	}
 
 	return &Response{ID: a.id, Model: a.model, Message: msg, Stop: stop, Usage: a.usage}
 }
 
-func (a *assembler) callCount() int {
-	n := 0
+// wholeReply maps a whole reply from the SDK. A gateway whose upstream
+// model fails can answer 200 with an error object in place of choices; that
+// error is returned.
+func wholeReply(c *openai.ChatCompletion) (*Response, error) {
+	if len(c.Choices) > 0 {
+		return completionResponse(c), nil
+	}
 
-	for _, call := range a.calls {
-		if call != nil {
-			n++
+	if f, ok := c.JSON.ExtraFields["error"]; ok && f.Raw() != respjson.Null {
+		return nil, errorInBody([]byte(c.RawJSON()))
+	}
+
+	return nil, ErrEmptyResponse
+}
+
+// replay emits the events a stream of resp would have carried. It returns
+// false once emit does.
+func replay(resp *Response, emit func(Event) bool) bool {
+	m := resp.Message
+
+	if m.Reasoning != "" && !emit(ReasoningDelta{Text: m.Reasoning}) {
+		return false
+	}
+
+	if m.Content != "" && !emit(TextDelta{Text: m.Content}) {
+		return false
+	}
+
+	for i, call := range m.ToolCalls {
+		if !emit(ToolCallStarted{Index: i, ID: call.ID, Name: call.Name}) ||
+			!emit(ToolCallDelta{Index: i, Arguments: call.Arguments}) ||
+			!emit(ToolCallDone{Index: i, Call: call}) {
+			return false
 		}
 	}
 
-	return n
+	return true
 }
 
 // completionResponse maps a whole reply from the SDK.
@@ -216,17 +254,23 @@ func completionResponse(c *openai.ChatCompletion) *Response {
 
 // completeCall fills in what a server left out of a finished call: an ID,
 // which the call's result has to name, and arguments for a tool that takes
-// none, which servers refuse to read back as an empty string.
+// none.
 func completeCall(id, name, args string) ToolCall {
 	if id == "" {
 		id = "call_" + rand.Text()
 	}
 
+	return ToolCall{ID: id, Name: name, Arguments: argumentsOrEmpty(args)}
+}
+
+// argumentsOrEmpty returns args, or an empty JSON object for a call with no
+// arguments, which servers refuse to read back as an empty string.
+func argumentsOrEmpty(args string) string {
 	if strings.TrimSpace(args) == "" {
-		args = "{}"
+		return "{}"
 	}
 
-	return ToolCall{ID: id, Name: name, Arguments: args}
+	return args
 }
 
 // argumentsOf returns a tool call's arguments as JSON text. The SDK decodes

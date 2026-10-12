@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,10 +36,14 @@ type attempts struct {
 	// onRetry, when not nil, hears of each retry as it starts.
 	onRetry func(Retrying)
 
+	// stream marks a streaming request, and whole holds the JSON reply a
+	// server sent to one in place of a stream.
+	stream bool
+	whole  []byte
+
 	count  int
 	last   *APIError
 	lastTx error
-	status int
 }
 
 func (a *attempts) track(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
@@ -62,10 +67,12 @@ func (a *attempts) track(req *http.Request, next option.MiddlewareNext) (*http.R
 		return res, err
 	}
 
-	a.status = res.StatusCode
-
 	if res.StatusCode < http.StatusBadRequest {
 		a.last, a.lastTx = nil, nil
+
+		if a.stream && isJSON(res.Header) {
+			return a.keepWhole(res)
+		}
 
 		return res, nil
 	}
@@ -89,6 +96,35 @@ func (a *attempts) track(req *http.Request, next option.MiddlewareNext) (*http.R
 	res.Header.Set("Content-Length", strconv.Itoa(len(body)))
 
 	return res, nil
+}
+
+// keepWhole keeps a JSON reply to a streaming request and hands the SDK an
+// empty stream in its place. The SDK reads any body as server-sent events,
+// so it would find no events in the JSON and drop the reply.
+func (a *attempts) keepWhole(res *http.Response) (*http.Response, error) {
+	body, err := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+
+	if err != nil {
+		a.lastTx = &TransportError{Err: err}
+
+		return nil, err
+	}
+
+	a.whole = body
+
+	res.Body = http.NoBody
+	res.ContentLength = 0
+	res.Header.Del("Content-Length")
+	res.Header.Set("Content-Type", "text/event-stream")
+
+	return res, nil
+}
+
+func isJSON(h http.Header) bool {
+	mediaType, _, _ := mime.ParseMediaType(h.Get("Content-Type"))
+
+	return mediaType == "application/json"
 }
 
 // explain turns an error the SDK returned into this package's: the parsed

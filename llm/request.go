@@ -119,22 +119,19 @@ func (c *Client) message(m Message) (openai.ChatCompletionMessageParamUnion, err
 	case RoleAssistant:
 		var a openai.ChatCompletionAssistantMessageParam
 
-		// An assistant message that only calls tools leaves content out;
-		// some servers refuse an empty string there.
-		if m.Content != "" {
+		// An assistant message that only calls tools leaves content out,
+		// because some servers refuse an empty string there. One that has
+		// neither text nor calls, such as a reply that only reasoned, still
+		// needs the field: OpenAI refuses a message without it.
+		if m.Content != "" || len(m.ToolCalls) == 0 {
 			a.Content.OfString = openai.String(m.Content)
 		}
 
 		for _, tc := range m.ToolCalls {
-			args := tc.Arguments
-			if args == "" {
-				args = "{}"
-			}
-
 			a.ToolCalls = append(a.ToolCalls, openai.ChatCompletionMessageToolCallUnionParam{
 				OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
 					ID:       tc.ID,
-					Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{Name: tc.Name, Arguments: args},
+					Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{Name: tc.Name, Arguments: argumentsOrEmpty(tc.Arguments)},
 				},
 			})
 		}

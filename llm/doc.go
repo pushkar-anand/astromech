@@ -14,5 +14,5 @@
 // reply.
 //
 // Failed requests are retried before any output reaches the caller. See
-// [RetryPolicy].
+// [WithMaxRetries].
 package llm

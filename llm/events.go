@@ -63,10 +63,12 @@ type Done struct {
 	Response *Response
 }
 
-// Failed ends a stream that did not finish. Partial holds what arrived
-// before the failure, with Stop set to [StopCanceled] or [StopFailed], so a
-// caller can keep it in the conversation and ask the model to continue. It
-// is nil when the request failed before any reply arrived.
+// Failed ends a stream that did not finish. Partial holds the text and
+// reasoning that arrived before the failure, with Stop set to
+// [StopCanceled] or [StopFailed], so a caller can keep it in the
+// conversation and ask the model to continue. Tool calls are left out of
+// it, because their arguments can be cut off. It is nil when no text or
+// reasoning arrived.
 type Failed struct {
 	Err     error
 	Partial *Response

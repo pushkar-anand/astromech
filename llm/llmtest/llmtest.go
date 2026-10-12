@@ -42,9 +42,14 @@ type Reply struct {
 	// carries. Zero uses 3.
 	ChunkSize int
 
-	// Raw, when not empty, is sent as the streamed body verbatim, for a
-	// server quirk the other fields cannot describe.
+	// Raw, when not empty, is sent as the body verbatim, for a server quirk
+	// the other fields cannot describe. A streamed reply's Raw is a stream,
+	// such as one [SSE] renders; a whole reply's is JSON.
 	Raw string
+
+	// Whole answers a streaming request with the whole reply as JSON, as
+	// some servers do.
+	Whole bool
 }
 
 // Text returns a reply that answers with text.
@@ -182,7 +187,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 
 	_ = json.Unmarshal(body, &req)
 
-	if req.Stream {
+	if req.Stream && !reply.Whole {
 		writeStream(w, reply, req.StreamOptions.IncludeUsage)
 
 		return
@@ -222,6 +227,14 @@ func usageJSON(u llm.Usage) map[string]any {
 }
 
 func writeCompletion(w http.ResponseWriter, r Reply) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Raw != "" {
+		_, _ = io.WriteString(w, r.Raw)
+
+		return
+	}
+
 	msg := map[string]any{"role": "assistant", "content": r.Text}
 	if r.Reasoning != "" {
 		msg["reasoning_content"] = r.Reasoning
@@ -240,7 +253,6 @@ func writeCompletion(w http.ResponseWriter, r Reply) {
 		msg["tool_calls"] = calls
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"id":      "chatcmpl-test",
 		"object":  "chat.completion",

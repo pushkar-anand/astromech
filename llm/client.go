@@ -3,6 +3,7 @@ package llm
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -166,11 +167,7 @@ func (c *Client) Complete(ctx context.Context, req Request) (*Response, error) {
 		return nil, att.explain(ctx, err)
 	}
 
-	if len(completion.Choices) == 0 {
-		return nil, ErrEmptyResponse
-	}
-
-	return completionResponse(completion), nil
+	return wholeReply(completion)
 }
 
 // Stream sends req and yields the reply as it arrives. Stopping the loop
@@ -207,7 +204,7 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 			return !stopped
 		}
 
-		att := attempts{onRetry: func(r Retrying) { emit(r) }}
+		att := attempts{onRetry: func(r Retrying) { emit(r) }, stream: true}
 
 		stream := c.chat.NewStreaming(ctx, p, option.WithMiddleware(att.track))
 		defer stream.Close()
@@ -225,6 +222,22 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 
 		if err := stream.Err(); err != nil {
 			yield(Failed{Err: att.explainStream(ctx, err), Partial: a.partial(ctx)})
+
+			return
+		}
+
+		// Some servers answer a streaming request with the whole reply.
+		if att.whole != nil {
+			resp, err := decodeWhole(att.whole)
+			if err != nil {
+				yield(Failed{Err: err})
+
+				return
+			}
+
+			if replay(resp, emit) {
+				yield(Done{Response: resp})
+			}
 
 			return
 		}
@@ -248,11 +261,18 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 // be a failure the server reported inside the stream.
 func (a *attempts) explainStream(ctx context.Context, err error) error {
 	if se, ok := errors.AsType[*ssestream.StreamError](err); ok {
-		e := parseErrorBody(se.Event.Data)
-		e.StatusCode = a.status
-
-		return e
+		return errorInBody(se.Event.Data)
 	}
 
 	return a.explain(ctx, err)
+}
+
+// decodeWhole reads the JSON reply a server sent to a streaming request.
+func decodeWhole(body []byte) (*Response, error) {
+	var completion openai.ChatCompletion
+	if err := json.Unmarshal(body, &completion); err != nil {
+		return nil, fmt.Errorf("llm: the server answered a streaming request with JSON that is not a chat completion: %w", err)
+	}
+
+	return wholeReply(&completion)
 }

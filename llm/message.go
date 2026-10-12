@@ -151,8 +151,9 @@ const (
 // effort gives better answers to hard questions and costs time and tokens.
 type Effort string
 
-// Effort values, from none to the most. Servers that offer fewer levels get
-// the nearest one they have.
+// Effort values, from none to the most. A level is sent as it is, and a
+// server that does not offer it refuses the request; many offer only low,
+// medium and high.
 const (
 	EffortOff     Effort = "off"
 	EffortMinimal Effort = "minimal"

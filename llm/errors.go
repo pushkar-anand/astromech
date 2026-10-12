@@ -14,8 +14,9 @@ import (
 )
 
 var (
-	// ErrEmptyResponse is returned when a server answers with no choices,
-	// which some gateways do when the upstream model fails.
+	// ErrEmptyResponse is returned when a server answers with no choices
+	// and no error to say why, which some gateways do when the upstream
+	// model fails.
 	ErrEmptyResponse = errors.New("llm: the server answered with no reply")
 
 	// ErrIncompleteStream is returned when a stream ends before the server
@@ -25,8 +26,9 @@ var (
 
 // APIError is a request the server refused or failed.
 type APIError struct {
-	// StatusCode is the HTTP status. An error sent inside a stream that had
-	// already started carries the stream's status, usually 200.
+	// StatusCode is the HTTP status. An error a server sends inside a 200
+	// response, in a stream or in place of a reply, carries the status its
+	// code names, as OpenRouter's do, or 0 when it names none.
 	StatusCode int
 
 	// Type, Code and Param are the fields of an OpenAI error object, empty
@@ -167,6 +169,17 @@ const maxErrorBody = 64 << 10
 
 // maxErrorMessage caps the message kept from an unstructured error body.
 const maxErrorMessage = 512
+
+// errorInBody parses an error a server sent inside a 200 response.
+func errorInBody(body []byte) *APIError {
+	e := parseErrorBody(body)
+
+	if n, err := strconv.Atoi(e.Code); err == nil && n >= http.StatusBadRequest && n < 600 {
+		e.StatusCode = n
+	}
+
+	return e
+}
 
 // newAPIError builds the error for a response with status code and body.
 func newAPIError(code int, h http.Header, body []byte) *APIError {
