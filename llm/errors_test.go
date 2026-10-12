@@ -20,6 +20,8 @@ func TestIsRetryable(t *testing.T) {
 		{"rate limit", &APIError{StatusCode: http.StatusTooManyRequests}, true},
 		{"server error", &APIError{StatusCode: http.StatusBadGateway}, true},
 		{"refusal", &APIError{StatusCode: http.StatusBadRequest}, false},
+		{"server error with no status", &APIError{Type: "server_error"}, true},
+		{"refusal with no status", &APIError{Type: "invalid_request_error"}, false},
 		{"server says retry", &APIError{StatusCode: http.StatusBadRequest, shouldRetry: new(true)}, true},
 		{"server says do not retry", &APIError{StatusCode: http.StatusServiceUnavailable, shouldRetry: new(false)}, false},
 		{"dropped connection", &TransportError{Err: errors.New("connection reset by peer")}, true},

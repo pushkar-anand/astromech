@@ -74,10 +74,16 @@ func (e *APIError) Error() string {
 }
 
 // retryable reports whether sending the same request again can succeed.
-// The statuses are the ones OpenAI's own SDKs retry.
+// The statuses are the ones OpenAI's own SDKs retry. An error with no
+// status, such as one OpenAI sends mid-stream, names its kind only in its
+// type or code.
 func (e *APIError) retryable() bool {
 	if e.shouldRetry != nil {
 		return *e.shouldRetry
+	}
+
+	if e.StatusCode == 0 {
+		return e.Type == "server_error" || e.Code == "server_error"
 	}
 
 	switch e.StatusCode {

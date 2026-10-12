@@ -242,6 +242,15 @@ func TestStreamToleratesLocalServerToolCalls(t *testing.T) {
 			},
 		},
 		{
+			name: "no index, arguments in pieces",
+			calls: []map[string]any{
+				{"function": map[string]any{"name": "lights_on", "arguments": `{"room":`}},
+				{"function": map[string]any{"arguments": `"bedroom"}`}},
+				{"function": map[string]any{"name": "lights_on", "arguments": `{"room":`}},
+				{"function": map[string]any{"arguments": `"hall"}`}},
+			},
+		},
+		{
 			name: "indexes out of range",
 			calls: []map[string]any{
 				{"index": -1, "function": map[string]any{"name": "lights_on", "arguments": `{"room":"bedroom"}`}},
@@ -298,6 +307,7 @@ func TestStreamReportsAnErrorSentMidStream(t *testing.T) {
 	require.True(t, ok, "got %v", failed.Err)
 	assert.Equal(t, "upstream model failed", apiErr.Message)
 	assert.Equal(t, "server_error", apiErr.Code)
+	assert.True(t, llm.IsRetryable(failed.Err), "a server error with no status can be retried")
 
 	require.NotNil(t, failed.Partial)
 	assert.Equal(t, "The bedroom", failed.Partial.Message.Content)

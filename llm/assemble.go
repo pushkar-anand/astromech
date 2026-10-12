@@ -107,11 +107,12 @@ func (a *assembler) addCall(tc openai.ChatCompletionChunkChoiceDeltaToolCall, em
 }
 
 // callIndex places a tool call delta among the reply's calls, starting a
-// new call when the delta begins one, and reports whether it did. Servers
-// that leave the index out send each call whole. Some local servers send
-// every call at index 0: a new ID there starts a new call, and the pieces
-// that follow without an ID belong to it. The server's index only names a
-// call, so an index far out of order or below 0 costs nothing.
+// new call when the delta begins one, and reports whether it did. Some
+// local servers send every call at index 0: a new ID there starts a new
+// call, and the pieces that follow without an ID belong to it. Without an
+// index, a delta that names a tool starts a call and one that names
+// neither a tool nor an ID continues the latest. The server's index only
+// names a call, so an index far out of order or below 0 costs nothing.
 func (a *assembler) callIndex(tc openai.ChatCompletionChunkChoiceDeltaToolCall) (int, bool) {
 	if tc.JSON.Index.Valid() {
 		if i, ok := a.slots[tc.Index]; ok {
@@ -120,6 +121,8 @@ func (a *assembler) callIndex(tc openai.ChatCompletionChunkChoiceDeltaToolCall) 
 				return i, false
 			}
 		}
+	} else if tc.ID == "" && tc.Function.Name == "" && len(a.calls) > 0 {
+		return len(a.calls) - 1, false
 	}
 
 	i := len(a.calls)
