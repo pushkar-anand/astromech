@@ -1,0 +1,42 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Coverage
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Dependency directories
+# vendor/
+
+# Go workspace
+go.work
+go.work.sum
+
+# Environment and local config (REPO_NAME.example.yaml is the committed template)
+.env
+REPO_NAME.yaml
+
+# Build output
+bin/
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
+# Editor/IDE
+.idea/
+.vscode/
+
+# Agent scratch
+.claude/
+.junie/

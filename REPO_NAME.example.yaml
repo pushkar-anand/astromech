@@ -1,0 +1,17 @@
+# Copy to REPO_NAME.yaml (gitignored) and edit for local runs.
+# Every key can also be set through the environment, e.g.
+#   REPO_NAME_UPPER_SERVER__PORT=9000
+#   REPO_NAME_UPPER_LOGGER__LEVEL=debug
+# Nested keys use a double underscore.
+
+server:
+  host: "127.0.0.1"
+  port: 8080
+
+db:
+  path: "."
+  name: "REPO_NAME.db"
+
+logger:
+  level: "debug"   # debug | info | warn | error
+  format: "text"   # text | json
