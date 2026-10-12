@@ -678,3 +678,41 @@ func TestAssistantMessagesAreSentTheWayServersAccept(t *testing.T) {
 	fn, _ := calls[0].(map[string]any)["function"].(map[string]any)
 	assert.Equal(t, "{}", fn["arguments"])
 }
+
+func TestThinkTagsMoveInlineReasoning(t *testing.T) {
+	srv := llmtest.NewServer(t)
+	srv.Enqueue(
+		llmtest.Reply{Text: "<think>Two lamps are on.</think>\n\n2", ChunkSize: 4},
+		llmtest.Reply{Text: "<think>Two lamps are on.</think>\n\n2", Whole: true},
+		llmtest.Reply{Text: "<think>Two lamps are on.</think>\n\n2"},
+	)
+
+	c := newClient(t, srv, llm.WithCompat(llm.Compat{ThinkTags: true}))
+
+	// The first stream arrives in chunks, the second as one JSON reply.
+	for range 2 {
+		events := collect(t, c, ask("how many lamps?"))
+
+		var reasoning, text strings.Builder
+		for _, e := range events {
+			switch e := e.(type) {
+			case llm.ReasoningDelta:
+				reasoning.WriteString(e.Text)
+			case llm.TextDelta:
+				text.WriteString(e.Text)
+			}
+		}
+
+		assert.Equal(t, "Two lamps are on.", reasoning.String())
+		assert.Equal(t, "2", text.String())
+
+		done := last(t, events).(llm.Done)
+		assert.Equal(t, "2", done.Response.Message.Content)
+		assert.Equal(t, "Two lamps are on.", done.Response.Message.Reasoning)
+	}
+
+	resp, err := c.Complete(t.Context(), ask("how many lamps?"))
+	require.NoError(t, err)
+	assert.Equal(t, "2", resp.Message.Content)
+	assert.Equal(t, "Two lamps are on.", resp.Message.Reasoning)
+}
