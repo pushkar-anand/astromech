@@ -21,17 +21,8 @@ profile.cov
 go.work
 go.work.sum
 
-# Environment and local config (REPO_NAME.example.yaml is the committed template)
+# Environment
 .env
-REPO_NAME.yaml
-
-# Build output
-bin/
-
-# SQLite databases
-*.db
-*.db-shm
-*.db-wal
 
 # Editor/IDE
 .idea/

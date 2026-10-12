@@ -13,4 +13,6 @@ permissions:
 jobs:
   coverage:
     uses: pushkar-anand/.github/.github/workflows/go-coverage.yml@main
+    with:
+      comment: false
     secrets: inherit
