@@ -27,6 +27,9 @@ type assembler struct {
 	finishReason string
 	finished     bool
 	usage        Usage
+
+	// think, when not nil, separates inline reasoning from the text.
+	think *thinkSplitter
 }
 
 type pendingCall struct {
@@ -62,9 +65,7 @@ func (a *assembler) add(chunk openai.ChatCompletionChunk, emit func(Event) bool)
 	}
 
 	if delta.Content != "" {
-		a.text.WriteString(delta.Content)
-
-		if !emit(TextDelta{Text: delta.Content}) {
+		if !a.addText(delta.Content, emit) {
 			return false
 		}
 	}
@@ -78,6 +79,35 @@ func (a *assembler) add(chunk openai.ChatCompletionChunk, emit func(Event) bool)
 	if choice.FinishReason != "" {
 		a.finishReason = choice.FinishReason
 		a.finished = true
+	}
+
+	return true
+}
+
+func (a *assembler) addText(text string, emit func(Event) bool) bool {
+	if a.think == nil {
+		a.text.WriteString(text)
+
+		return emit(TextDelta{Text: text})
+	}
+
+	return a.addSegments(a.think.feed(text), emit)
+}
+
+func (a *assembler) addSegments(segs []segment, emit func(Event) bool) bool {
+	for _, seg := range segs {
+		var e Event = TextDelta{Text: seg.text}
+
+		if seg.reasoning {
+			a.reasoning.WriteString(seg.text)
+			e = ReasoningDelta{Text: seg.text}
+		} else {
+			a.text.WriteString(seg.text)
+		}
+
+		if !emit(e) {
+			return false
+		}
 	}
 
 	return true
@@ -142,6 +172,10 @@ func (a *assembler) callIndex(tc openai.ChatCompletionChunkChoiceDeltaToolCall) 
 // finish emits each tool call as done and returns the reply. It returns
 // false once emit does.
 func (a *assembler) finish(emit func(Event) bool) (*Response, bool) {
+	if a.think != nil && !a.addSegments(a.think.flush(), emit) {
+		return nil, false
+	}
+
 	resp := a.response(stopReason(a.finishReason, len(a.calls)))
 
 	for i, call := range resp.Message.ToolCalls {
@@ -158,6 +192,10 @@ func (a *assembler) finish(emit func(Event) bool) (*Response, bool) {
 // can be cut off, and a server refuses a conversation that holds a call
 // with no result.
 func (a *assembler) partial(ctx context.Context) *Response {
+	if a.think != nil {
+		a.addSegments(a.think.flush(), func(Event) bool { return true })
+	}
+
 	if a.text.Len() == 0 && a.reasoning.Len() == 0 {
 		return nil
 	}
@@ -189,9 +227,9 @@ func (a *assembler) response(stop StopReason) *Response {
 
 // wholeReply maps a whole reply from the SDK, or returns the error a server
 // sent in place of one.
-func wholeReply(c *openai.ChatCompletion) (*Response, error) {
+func wholeReply(c *openai.ChatCompletion, thinkTags bool) (*Response, error) {
 	if len(c.Choices) > 0 {
-		return completionResponse(c), nil
+		return completionResponse(c, thinkTags), nil
 	}
 
 	if e := errorInReply(c.JSON.ExtraFields, c.RawJSON()); e != nil {
@@ -226,7 +264,7 @@ func replay(resp *Response, emit func(Event) bool) bool {
 }
 
 // completionResponse maps a whole reply from the SDK.
-func completionResponse(c *openai.ChatCompletion) *Response {
+func completionResponse(c *openai.ChatCompletion, thinkTags bool) *Response {
 	choice := c.Choices[0]
 	m := choice.Message
 
@@ -234,6 +272,12 @@ func completionResponse(c *openai.ChatCompletion) *Response {
 		Role:      RoleAssistant,
 		Content:   m.Content,
 		Reasoning: reasoningOf(m.JSON.ExtraFields),
+	}
+
+	if thinkTags {
+		answer, reasoning := splitThink(m.Content)
+		msg.Content = answer
+		msg.Reasoning += reasoning
 	}
 
 	for _, tc := range m.ToolCalls {

@@ -34,6 +34,12 @@ type Compat struct {
 
 	// Reasoning is the field [Request.Reasoning] is sent in.
 	Reasoning ReasoningFormat
+
+	// ThinkTags moves <think>…</think> in a reply's text into
+	// [Message.Reasoning], for servers that leave a reasoning model's
+	// thinking inline, as llama.cpp does with --reasoning-format none and
+	// Ollama did before 0.9.
+	ThinkTags bool
 }
 
 // ReasoningFormat is how a server takes the reasoning [Effort].
@@ -171,7 +177,7 @@ func (c *Client) Complete(ctx context.Context, req Request) (*Response, error) {
 		return nil, att.explain(ctx, err)
 	}
 
-	return wholeReply(completion)
+	return wholeReply(completion, c.compat.ThinkTags)
 }
 
 // Stream sends req and yields the reply as it arrives. Stopping the loop
@@ -214,6 +220,10 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 		defer stream.Close()
 
 		var a assembler
+		if c.compat.ThinkTags {
+			a.think = &thinkSplitter{}
+		}
+
 		for stream.Next() {
 			if !a.add(stream.Current(), emit) {
 				return
@@ -232,7 +242,7 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 
 		// Some servers answer a streaming request with the whole reply.
 		if att.whole != nil {
-			resp, err := decodeWhole(att.whole)
+			resp, err := decodeWhole(att.whole, c.compat.ThinkTags)
 			if err != nil {
 				yield(Failed{Err: err})
 
@@ -272,11 +282,11 @@ func (a *attempts) explainStream(ctx context.Context, err error) error {
 }
 
 // decodeWhole reads the JSON reply a server sent to a streaming request.
-func decodeWhole(body []byte) (*Response, error) {
+func decodeWhole(body []byte, thinkTags bool) (*Response, error) {
 	var completion openai.ChatCompletion
 	if err := json.Unmarshal(body, &completion); err != nil {
 		return nil, fmt.Errorf("llm: the server answered a streaming request with JSON that is not a chat completion: %w", err)
 	}
 
-	return wholeReply(&completion)
+	return wholeReply(&completion, thinkTags)
 }
