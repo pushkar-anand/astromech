@@ -8,6 +8,7 @@ tool (
 )
 
 require (
+	github.com/google/jsonschema-go v0.4.3
 	github.com/openai/openai-go/v3 v3.77.0
 	github.com/stretchr/testify v1.12.1
 )

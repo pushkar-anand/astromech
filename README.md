@@ -1,9 +1,9 @@
 # astromech
 
-An embeddable LLM agent harness for Go. Give it a system prompt, tools and a
-place to keep conversations, and it runs the tool-calling loop against any
-OpenAI-compatible API, streaming what happens as events your program renders:
-a web chat panel, a CLI, a bot or a background job.
+An embeddable LLM agent harness for Go. Give it a system prompt and tools, and
+it runs the tool-calling loop against any OpenAI-compatible API. It streams
+what happens as events your program renders, in a web chat panel, a CLI, a bot
+or a background job, and hands back each message for your program to store.
 
 > Status: under construction. The API will change until `v0.1.0`.
 
@@ -13,7 +13,7 @@ a web chat panel, a CLI, a bot or a background job.
 | ----------- | ---------- |
 | `llm`       | Client for OpenAI-compatible servers: chat, streamed or whole, with reasoning levels and image input; embeddings; the model list with what each model accepts |
 | `llm/llmtest` | A fake Chat Completions server for tests, with scripted replies |
-| `agent`     | The loop: tools, approvals, conversation storage, context budget |
+| `agent`     | The loop: tools, permission modes, and approvals that wait across requests |
 | `mcptool`   | Tools from any MCP client session, in-process or remote |
 | `chathttp`  | Server-sent events framing for `net/http` handlers |
 
