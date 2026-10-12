@@ -187,16 +187,15 @@ func (a *assembler) response(stop StopReason) *Response {
 	return &Response{ID: a.id, Model: a.model, Message: msg, Stop: stop, Usage: a.usage}
 }
 
-// wholeReply maps a whole reply from the SDK. A gateway whose upstream
-// model fails can answer 200 with an error object in place of choices; that
-// error is returned.
+// wholeReply maps a whole reply from the SDK, or returns the error a server
+// sent in place of one.
 func wholeReply(c *openai.ChatCompletion) (*Response, error) {
 	if len(c.Choices) > 0 {
 		return completionResponse(c), nil
 	}
 
-	if f, ok := c.JSON.ExtraFields["error"]; ok && f.Raw() != respjson.Null {
-		return nil, errorInBody([]byte(c.RawJSON()))
+	if e := errorInReply(c.JSON.ExtraFields, c.RawJSON()); e != nil {
+		return nil, e
 	}
 
 	return nil, ErrEmptyResponse
