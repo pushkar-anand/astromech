@@ -11,7 +11,7 @@ a web chat panel, a CLI, a bot or a background job.
 
 | Package     | What it is |
 | ----------- | ---------- |
-| `llm`       | Client for OpenAI-compatible `/chat/completions`, streamed or whole, with reasoning levels and image input |
+| `llm`       | Client for OpenAI-compatible servers: chat, streamed or whole, with reasoning levels and image input; embeddings; the model list with what each model accepts |
 | `llm/llmtest` | A fake Chat Completions server for tests, with scripted replies |
 | `agent`     | The loop: tools, approvals, conversation storage, context budget |
 | `mcptool`   | Tools from any MCP client session, in-process or remote |

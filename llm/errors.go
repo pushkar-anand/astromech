@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/openai/openai-go/v3/packages/respjson"
 )
 
 var (
@@ -185,6 +187,17 @@ func errorInBody(body []byte) *APIError {
 	}
 
 	return e
+}
+
+// errorInReply returns the error object a server sent in place of a reply
+// inside a 200 response, as a gateway whose upstream model fails can, or nil
+// when it sent none. raw is the whole response body.
+func errorInReply(fields map[string]respjson.Field, raw string) *APIError {
+	if f, ok := fields["error"]; ok && f.Raw() != respjson.Null {
+		return errorInBody([]byte(raw))
+	}
+
+	return nil
 }
 
 // newAPIError builds the error for a response with status code and body.

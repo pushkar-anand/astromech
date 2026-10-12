@@ -101,21 +101,31 @@ func TestEnvironmentDoesNotReachTheServer(t *testing.T) {
 	t.Setenv("OPENAI_CUSTOM_HEADERS", "X-From-Env: 1\nX-App: from-env")
 
 	srv := llmtest.NewServer(t)
-	srv.Enqueue(llmtest.Text("ok"))
+	srv.Enqueue(llmtest.Text("ok"), llmtest.Embeddings([]float32{0.5}), llmtest.Models("test-model"))
 
 	c := newClient(t, srv, llm.WithHeader("X-App", "from-option"))
+
+	// Each call goes through a different SDK service.
 	_, err := c.Complete(t.Context(), ask("hi"))
 	require.NoError(t, err, "the request reached the configured server, not OPENAI_BASE_URL")
+	_, err = c.Embed(t.Context(), llm.EmbedRequest{Model: "test-embed", Input: []string{"hi"}})
+	require.NoError(t, err)
+	_, err = c.Models(t.Context())
+	require.NoError(t, err)
 
-	h := srv.Requests()[0].Header
-	assert.Empty(t, h.Get("Authorization"))
-	assert.Empty(t, h.Get("OpenAI-Organization"))
-	assert.Empty(t, h.Get("OpenAI-Project"))
-	assert.Empty(t, h.Get("X-From-Env"))
-	assert.Equal(t, "from-option", h.Get("X-App"))
+	require.Len(t, srv.Requests(), 3)
 
-	for name := range h {
-		assert.False(t, strings.HasPrefix(name, "X-Stainless-"), "%s reports the host to the server", name)
+	for _, req := range srv.Requests() {
+		h := req.Header
+		assert.Empty(t, h.Get("Authorization"))
+		assert.Empty(t, h.Get("OpenAI-Organization"))
+		assert.Empty(t, h.Get("OpenAI-Project"))
+		assert.Empty(t, h.Get("X-From-Env"))
+		assert.Equal(t, "from-option", h.Get("X-App"))
+
+		for name := range h {
+			assert.False(t, strings.HasPrefix(name, "X-Stainless-"), "%s reports the host to the server", name)
+		}
 	}
 }
 

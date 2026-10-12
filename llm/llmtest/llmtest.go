@@ -1,4 +1,4 @@
-// Package llmtest is a fake Chat Completions server for testing code that
+// Package llmtest is a fake OpenAI-compatible server for testing code that
 // uses package llm. Queue the replies a test expects, point an [llm.Client]
 // at [Server.URL], and read back what the client sent.
 //
@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -44,12 +45,35 @@ type Reply struct {
 
 	// Raw, when not empty, is sent as the body verbatim, for a server quirk
 	// the other fields cannot describe. A streamed reply's Raw is a stream,
-	// such as one [SSE] renders; a whole reply's is JSON.
+	// such as one [SSE] renders; a whole reply's or an embedding reply's is
+	// JSON.
 	Raw string
 
 	// Whole answers a streaming request with the whole reply as JSON, as
 	// some servers do.
 	Whole bool
+
+	// Vectors answers an embeddings request, one vector per input.
+	Vectors [][]float32
+
+	// Models answers a model list request. Each entry is sent as a model
+	// object, so it can carry the extra fields some servers add.
+	Models []map[string]any
+}
+
+// Embeddings returns a reply to an embeddings request.
+func Embeddings(vectors ...[]float32) Reply {
+	return Reply{Vectors: vectors}
+}
+
+// Models returns a reply to a model list request naming ids.
+func Models(ids ...string) Reply {
+	models := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
+		models = append(models, map[string]any{"id": id})
+	}
+
+	return Reply{Models: models}
 }
 
 // Text returns a reply that answers with text.
@@ -159,13 +183,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.URL.Path != "/v1/chat/completions" {
-		s.t.Errorf("llmtest: %s %s is not an endpoint this server answers", r.Method, r.URL.Path)
-		http.NotFound(w, r)
-
-		return
-	}
-
 	for k, vs := range reply.Header {
 		w.Header()[k] = vs
 	}
@@ -174,6 +191,23 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(reply.Status)
 		_, _ = io.WriteString(w, reply.Body)
+
+		return
+	}
+
+	switch r.URL.Path {
+	case "/v1/chat/completions":
+	case "/v1/embeddings":
+		writeEmbeddings(w, reply)
+
+		return
+	case "/v1/models":
+		writeModels(w, reply)
+
+		return
+	default:
+		s.t.Errorf("llmtest: %s %s is not an endpoint this server answers", r.Method, r.URL.Path)
+		http.NotFound(w, r)
 
 		return
 	}
@@ -261,6 +295,40 @@ func writeCompletion(w http.ResponseWriter, r Reply) {
 		"choices": []map[string]any{{"index": 0, "message": msg, "finish_reason": r.finishReason()}},
 		"usage":   usageJSON(r.Usage),
 	})
+}
+
+func writeEmbeddings(w http.ResponseWriter, r Reply) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Raw != "" {
+		_, _ = io.WriteString(w, r.Raw)
+
+		return
+	}
+
+	data := make([]map[string]any, 0, len(r.Vectors))
+	for i, v := range r.Vectors {
+		data = append(data, map[string]any{"object": "embedding", "index": i, "embedding": v})
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"object": "list",
+		"model":  "test-embedder",
+		"data":   data,
+		"usage":  map[string]any{"prompt_tokens": r.Usage.InputTokens, "total_tokens": r.Usage.InputTokens},
+	})
+}
+
+func writeModels(w http.ResponseWriter, r Reply) {
+	data := make([]map[string]any, 0, len(r.Models))
+	for _, m := range r.Models {
+		obj := map[string]any{"object": "model", "created": 0, "owned_by": "llmtest"}
+		maps.Copy(obj, m)
+		data = append(data, obj)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
 }
 
 func writeStream(w http.ResponseWriter, r Reply, includeUsage bool) {

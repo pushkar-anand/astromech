@@ -66,8 +66,10 @@ const (
 // reads into every client: a key, organization or custom header meant for
 // OpenAI or a gateway never reaches the server the client talks to.
 type Client struct {
-	chat   openai.ChatCompletionService
-	compat Compat
+	chat       openai.ChatCompletionService
+	embeddings openai.EmbeddingService
+	models     openai.ModelService
+	compat     Compat
 }
 
 // Option configures a [Client].
@@ -148,8 +150,10 @@ func New(baseURL string, opts ...Option) (*Client, error) {
 	}
 
 	return &Client{
-		chat:   openai.NewChatCompletionService(sdkOpts...),
-		compat: cfg.compat,
+		chat:       openai.NewChatCompletionService(sdkOpts...),
+		embeddings: openai.NewEmbeddingService(sdkOpts...),
+		models:     openai.NewModelService(sdkOpts...),
+		compat:     cfg.compat,
 	}, nil
 }
 
