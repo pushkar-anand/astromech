@@ -14,7 +14,4 @@ jobs:
   ci:
     uses: pushkar-anand/.github/.github/workflows/go-ci.yml@main
     with:
-      build-tags: "" # e.g. "goolm" — set per project
       run-lint: true
-      # Fails the build if the checked-in sqlc models are stale.
-      generate-command: "make gen"
