@@ -11,12 +11,25 @@ a web chat panel, a CLI, a bot or a background job.
 
 | Package     | What it is |
 | ----------- | ---------- |
-| `llm`       | Client for OpenAI-compatible `/chat/completions` (streamed or not), `/embeddings` and `/models` |
+| `llm`       | Client for OpenAI-compatible `/chat/completions`, streamed or whole, with reasoning levels and image input |
+| `llm/llmtest` | A fake Chat Completions server for tests, with scripted replies |
 | `agent`     | The loop: tools, approvals, conversation storage, context budget |
 | `mcptool`   | Tools from any MCP client session, in-process or remote |
 | `chathttp`  | Server-sent events framing for `net/http` handlers |
 
 Only `chathttp` knows about HTTP serving. Everything else runs anywhere Go does.
+
+## Dependencies
+
+| Module | Used by | For |
+| ------ | ------- | --- |
+| [`openai/openai-go`](https://github.com/openai/openai-go) | `llm` | Sending requests, retries, parsing streams. Kept behind the `llm` types, so callers do not import it. |
+| [`stretchr/testify`](https://github.com/stretchr/testify) | tests | Assertions |
+
+The OpenAI SDK reads `OPENAI_*` environment variables into every client.
+`llm.Client` always uses the base URL and key it was given, and removes the
+organization, project and custom headers the environment adds, so none of them
+reach a server other than the one configured.
 
 ## Compatible servers
 
