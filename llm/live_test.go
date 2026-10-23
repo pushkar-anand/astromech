@@ -113,4 +113,33 @@ func TestLLMLive(t *testing.T) {
 		t.Logf("assembled answer is %d bytes, reasoning %d bytes", len(done.Message.Content), len(done.Reasoning))
 		t.Logf("usage %+v, stats %+v", done.Usage, done.Stats)
 	})
+
+	t.Run("test completions with tool calling", func(t *testing.T) {
+		// The tool is offered in Tools; the model decides whether to call it.
+		// Complete does not read the call back yet, so this only shows how
+		// the backend took the request: "tool_calls" means the model asked.
+		add := Tool{
+			Name:        "add",
+			Description: "Adds two integers.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"a": map[string]any{"type": "integer"},
+					"b": map[string]any{"type": "integer"},
+				},
+				"required": []string{"a", "b"},
+			},
+		}
+
+		result, err := client.Complete(t.Context(), Request{
+			Model: "google/gemma-4-E4B-it-qat-q4_0-gguf",
+			Messages: []Message{
+				{Role: RoleUser, Content: "Use the add tool: what is 2 + 2?"},
+			},
+			Tools: []Tool{add},
+		})
+		require.NoError(t, err)
+
+		t.Logf("finish %q, content %q", result.FinishReason, result.Message.Content)
+	})
 }

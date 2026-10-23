@@ -8,6 +8,7 @@ const (
 	RoleSystem    Role = "system"
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
+	RoleTool      Role = "tool"
 
 	// RoleDeveloper is OpenAI-only; most other LLM backends reject it.
 	RoleDeveloper Role = "developer"

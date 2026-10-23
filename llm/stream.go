@@ -17,7 +17,7 @@ const streamEnd = "[DONE]"
 // Wire format of a stream.
 type (
 	streamRequest struct {
-		Request
+		chatRequest
 		Stream        bool           `json:"stream"`
 		StreamOptions *streamOptions `json:"stream_options,omitzero"`
 	}
@@ -68,7 +68,7 @@ func (Failed) event()         {}
 func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 	return func(yield func(Event) bool) {
 		sreq := streamRequest{
-			Request:       req,
+			chatRequest:   req.toWire(),
 			Stream:        true,
 			StreamOptions: &streamOptions{IncludeUsage: true},
 		}
