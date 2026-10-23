@@ -17,6 +17,12 @@ type Client struct {
 
 // New returns a Client for talking to LLM backend.
 func New(baseURL string, apiKey secret.Secret[string]) (*Client, error) {
+	return newClient(baseURL, apiKey)
+}
+
+// newClient is New with extra options, which tests use to swap the
+// transport.
+func newClient(baseURL string, apiKey secret.Secret[string], extra ...client.Option) (*Client, error) {
 	isDebug := os.Getenv("DEBUG_ASTROMECH") == "true"
 
 	opts := []client.Option{
@@ -35,6 +41,8 @@ func New(baseURL string, apiKey secret.Secret[string]) (*Client, error) {
 	if isDebug {
 		opts = append(opts, client.WithDebug(os.Stdout))
 	}
+
+	opts = append(opts, extra...)
 
 	c, err := client.New(opts...)
 	if err != nil {
