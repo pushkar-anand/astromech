@@ -58,7 +58,7 @@ func TestStream(t *testing.T) {
 		Message:      llm.Message{Role: llm.RoleAssistant, Content: "Hi there."},
 		Reasoning:    "They said hello.",
 		FinishReason: "stop",
-		Usage:        llm.Usage{PromptTokens: 9, CompletionTokens: 4, TotalTokens: 13},
+		Usage:        llm.Usage{InputTokens: 9, OutputTokens: 4, TotalTokens: 13},
 		Stats:        &llm.Stats{PromptMs: 100, PredictedMs: 150, PredictedPerSecond: 26.7},
 	}
 
@@ -169,7 +169,7 @@ func TestStreamErrorMidway(t *testing.T) {
 	var backendErr *llm.BackendError
 	require.ErrorAs(t, failed.Err, &backendErr)
 	assert.Equal(t, &llm.BackendError{Message: "out of memory", Type: "server_error"}, backendErr)
-	assert.EqualError(t, failed.Err, "llm: the LLM backend failed: out of memory")
+	assert.EqualError(t, failed.Err, "llm: stream: the LLM backend failed: out of memory")
 }
 
 func TestStreamError(t *testing.T) {
@@ -182,7 +182,8 @@ func TestStreamError(t *testing.T) {
 
 	failed, ok := events[0].(llm.Failed)
 	require.True(t, ok, "event is %T, want llm.Failed", events[0])
-	assert.Contains(t, failed.Err.Error(), "llm: stream")
+	assert.EqualError(t, failed.Err, "llm: stream: the LLM backend answered 404 Not Found: model not found")
+	requireBackendError(t, failed.Err, http.StatusNotFound)
 }
 
 func TestStreamWaitsForSlowModel(t *testing.T) {

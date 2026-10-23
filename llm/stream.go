@@ -33,7 +33,7 @@ type (
 			Delta        replyMessage `json:"delta"`
 			FinishReason string       `json:"finish_reason"`
 		} `json:"choices"`
-		Usage *Usage        `json:"usage,omitzero"`
+		Usage *usage        `json:"usage,omitzero"`
 		Stats *Stats        `json:"timings,omitzero"`
 		Error *BackendError `json:"error,omitzero"`
 	}
@@ -82,14 +82,14 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 
 		for event, err := range stream {
 			if err != nil {
-				yield(Failed{Err: fmt.Errorf("llm: stream: %w", err)})
+				yield(Failed{Err: fmt.Errorf("llm: stream: %w", explain(err))})
 				return
 			}
 
 			chunk := event.Data
 
 			if chunk.Error != nil {
-				yield(Failed{Err: chunk.Error})
+				yield(Failed{Err: fmt.Errorf("llm: stream: %w", chunk.Error)})
 				return
 			}
 
@@ -99,7 +99,7 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 			resp.Model = cmp.Or(resp.Model, chunk.Model)
 
 			if chunk.Usage != nil {
-				resp.Usage = *chunk.Usage
+				resp.Usage = chunk.Usage.toUsage()
 			}
 
 			if chunk.Stats != nil {

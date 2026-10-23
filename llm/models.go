@@ -29,7 +29,7 @@ type (
 func (c *Client) Models(ctx context.Context) ([]Model, error) {
 	list, err := c.httpClient.Get[modelList](ctx, modelsPath)
 	if err != nil {
-		return nil, fmt.Errorf("llm: list models: %w", err)
+		return nil, fmt.Errorf("llm: list models: %w", explain(err))
 	}
 
 	return list.Data, nil

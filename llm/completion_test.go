@@ -6,6 +6,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/pushkar-anand/build-with-go/http/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -36,11 +37,9 @@ func TestComplete(t *testing.T) {
 		Message:      llm.Message{Role: llm.RoleAssistant, Content: "Hi there."},
 		Reasoning:    "They said hello.",
 		FinishReason: "stop",
-		Usage:        llm.Usage{PromptTokens: 9, CompletionTokens: 4, TotalTokens: 13},
+		Usage:        llm.Usage{InputTokens: 9, OutputTokens: 4, TotalTokens: 13, CachedTokens: 2},
 		Stats:        &llm.Stats{PromptN: 9, PromptMs: 100, PredictedN: 4, PredictedMs: 150, PredictedPerSecond: 26.7},
 	}
-	want.Usage.PromptTokensDetails.CachedTokens = 2
-
 	assert.Equal(t, want, resp)
 
 	assert.Equal(t, map[string]any{
@@ -114,7 +113,23 @@ func TestCompleteError(t *testing.T) {
 	})
 
 	resp, err := c.Complete(t.Context(), hello)
-	require.Error(t, err)
 	assert.Nil(t, resp)
-	assert.Contains(t, err.Error(), "llm: chat completion")
+	assert.EqualError(t, err, "llm: chat completion: the LLM backend answered 404 Not Found: model not found")
+	requireBackendError(t, err, http.StatusNotFound)
+}
+
+func TestCompleteErrorWithoutMessage(t *testing.T) {
+	_, c := newBackend(t, map[string]reply{
+		"POST /v1/chat/completions": {status: http.StatusBadGateway, body: `<html>Bad Gateway</html>`},
+	})
+
+	_, err := c.Complete(t.Context(), hello)
+	require.Error(t, err)
+
+	var backendErr *llm.BackendError
+	assert.NotErrorAs(t, err, &backendErr)
+
+	var status *client.StatusError
+	require.ErrorAs(t, err, &status)
+	assert.Equal(t, http.StatusBadGateway, status.StatusCode)
 }

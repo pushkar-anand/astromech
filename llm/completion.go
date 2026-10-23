@@ -44,12 +44,13 @@ type (
 
 	// Usage counts the tokens a request used.
 	Usage struct {
-		CompletionTokens    int `json:"completion_tokens"`
-		PromptTokens        int `json:"prompt_tokens"`
-		TotalTokens         int `json:"total_tokens"`
-		PromptTokensDetails struct {
-			CachedTokens int `json:"cached_tokens"`
-		} `json:"prompt_tokens_details"`
+		InputTokens  int
+		OutputTokens int
+		TotalTokens  int
+
+		// CachedTokens is how many of the input tokens the LLM backend had
+		// cached from an earlier request.
+		CachedTokens int
 	}
 
 	// Stats is the timings llama.cpp reports for a request.
@@ -84,10 +85,28 @@ type (
 		ID      string   `json:"id"`
 		Model   string   `json:"model"`
 		Choices []choice `json:"choices"`
-		Usage   Usage    `json:"usage"`
+		Usage   usage    `json:"usage"`
 		Stats   *Stats   `json:"timings,omitzero"`
 	}
+
+	usage struct {
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		TotalTokens         int `json:"total_tokens"`
+		PromptTokensDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+	}
 )
+
+func (u usage) toUsage() Usage {
+	return Usage{
+		InputTokens:  u.PromptTokens,
+		OutputTokens: u.CompletionTokens,
+		TotalTokens:  u.TotalTokens,
+		CachedTokens: u.PromptTokensDetails.CachedTokens,
+	}
+}
 
 // thinking returns the model's reasoning, which LLM backends send under
 // either name.
@@ -99,7 +118,7 @@ func (m replyMessage) thinking() string {
 func (c *Client) Complete(ctx context.Context, req Request) (*Response, error) {
 	reply, err := c.httpClient.Post[completion](ctx, chatCompletionPath, req)
 	if err != nil {
-		return nil, fmt.Errorf("llm: chat completion: %w", err)
+		return nil, fmt.Errorf("llm: chat completion: %w", explain(err))
 	}
 
 	if len(reply.Choices) == 0 {
@@ -114,7 +133,7 @@ func (c *Client) Complete(ctx context.Context, req Request) (*Response, error) {
 		Message:      Message{Role: RoleAssistant, Content: first.Message.Content},
 		Reasoning:    first.Message.thinking(),
 		FinishReason: first.FinishReason,
-		Usage:        reply.Usage,
+		Usage:        reply.Usage.toUsage(),
 		Stats:        reply.Stats,
 	}, nil
 }

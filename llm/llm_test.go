@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pushkar-anand/build-with-go/http/client"
 	"github.com/pushkar-anand/build-with-go/secret"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -121,7 +122,23 @@ func (b *backend) lastHeader() http.Header {
 	return b.headers[len(b.headers)-1]
 }
 
-const errorBody = `{"error":{"message":"model not found","type":"invalid_request_error"}}`
+const errorBody = `{"error":{"message":"model not found","type":"invalid_request_error","code":"model_not_found"}}`
+
+// requireBackendError checks that err explains errorBody, sent with the
+// given status, and still leads to the error response.
+func requireBackendError(t *testing.T, err error, statusCode int) {
+	t.Helper()
+
+	var backendErr *llm.BackendError
+	require.ErrorAs(t, err, &backendErr)
+	assert.Equal(t, statusCode, backendErr.StatusCode)
+	assert.Equal(t, "model not found", backendErr.Message)
+	assert.Equal(t, "invalid_request_error", backendErr.Type)
+
+	var status *client.StatusError
+	require.ErrorAs(t, err, &status)
+	assert.Equal(t, statusCode, status.StatusCode)
+}
 
 var hello = llm.Request{
 	Model:    "model-a",

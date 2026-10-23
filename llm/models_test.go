@@ -33,7 +33,7 @@ func TestModelsError(t *testing.T) {
 	})
 
 	models, err := c.Models(t.Context())
-	require.Error(t, err)
 	assert.Nil(t, models)
-	assert.Contains(t, err.Error(), "llm: list models")
+	assert.EqualError(t, err, "llm: list models: the LLM backend answered 500 Internal Server Error: model not found")
+	requireBackendError(t, err, http.StatusInternalServerError)
 }
