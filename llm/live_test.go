@@ -115,9 +115,8 @@ func TestLLMLive(t *testing.T) {
 	})
 
 	t.Run("test completions with tool calling", func(t *testing.T) {
-		// The tool is offered in Tools; the model decides whether to call it.
-		// Complete does not read the call back yet, so this only shows how
-		// the backend took the request: "tool_calls" means the model asked.
+		const model = "google/gemma-4-E4B-it-qat-q4_0-gguf"
+
 		add := Tool{
 			Name:        "add",
 			Description: "Adds two integers.",
@@ -131,15 +130,28 @@ func TestLLMLive(t *testing.T) {
 			},
 		}
 
-		result, err := client.Complete(t.Context(), Request{
-			Model: "google/gemma-4-E4B-it-qat-q4_0-gguf",
-			Messages: []Message{
-				{Role: RoleUser, Content: "Use the add tool: what is 2 + 2?"},
-			},
-			Tools: []Tool{add},
-		})
+		history := []Message{{Role: RoleUser, Content: "Use the add tool: what is 2 + 2?"}}
+
+		first, err := client.Complete(t.Context(), Request{Model: model, Messages: history, Tools: []Tool{add}})
 		require.NoError(t, err)
 
-		t.Logf("finish %q, content %q", result.FinishReason, result.Message.Content)
+		t.Logf("finish %q, content %q, calls %+v", first.FinishReason, first.Message.Content, first.Message.ToolCalls)
+
+		// The finish reason is not reliable: some LLM backends say "stop"
+		// even when they call a tool.
+		if len(first.Message.ToolCalls) == 0 {
+			t.Skip("the model answered without calling the tool; is the LLM backend running with --jinja?")
+		}
+
+		history = append(history, first.Message)
+		for _, call := range first.Message.ToolCalls {
+			history = append(history, Message{Role: RoleTool, ToolCallID: call.ID, Content: "4"})
+		}
+
+		second, err := client.Complete(t.Context(), Request{Model: model, Messages: history, Tools: []Tool{add}})
+		require.NoError(t, err)
+
+		t.Logf("finish %q, answer %q", second.FinishReason, second.Message.Content)
+		assert.NotEmpty(t, second.Message.Content)
 	})
 }

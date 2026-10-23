@@ -116,11 +116,19 @@ type (
 
 // Wire format of a reply.
 type (
+	replyToolCall struct {
+		// Index orders the calls in a stream, where each arrives in pieces.
+		Index    int          `json:"index"`
+		ID       string       `json:"id"`
+		Function wireFunction `json:"function"`
+	}
+
 	replyMessage struct {
-		Role             Role   `json:"role"`
-		Content          string `json:"content"`
-		ReasoningContent string `json:"reasoning_content"`
-		Reasoning        string `json:"reasoning"`
+		Role             Role            `json:"role"`
+		Content          string          `json:"content"`
+		ReasoningContent string          `json:"reasoning_content"`
+		Reasoning        string          `json:"reasoning"`
+		ToolCalls        []replyToolCall `json:"tool_calls"`
 	}
 
 	choice struct {
@@ -153,6 +161,30 @@ func (u usage) toUsage() Usage {
 		TotalTokens:  u.TotalTokens,
 		CachedTokens: u.PromptTokensDetails.CachedTokens,
 	}
+}
+
+// toToolCall is the call as the harness sees it. i is its place in the
+// reply, used for an ID when the LLM backend sends none.
+func (tc replyToolCall) toToolCall(i int) ToolCall {
+	return ToolCall{
+		ID:        cmp.Or(tc.ID, fmt.Sprintf("call_%d", i)),
+		Name:      tc.Function.Name,
+		Arguments: cmp.Or(tc.Function.Arguments, "{}"),
+	}
+}
+
+// toolCalls converts the calls in a reply, and is nil when there are none.
+func toolCalls(rc []replyToolCall) []ToolCall {
+	if len(rc) == 0 {
+		return nil
+	}
+
+	out := make([]ToolCall, len(rc))
+	for i, c := range rc {
+		out[i] = c.toToolCall(i)
+	}
+
+	return out
 }
 
 // thinking returns the model's reasoning, which LLM backends send under
@@ -233,9 +265,13 @@ func (c *Client) Complete(ctx context.Context, req Request) (*Response, error) {
 	first := reply.Choices[0]
 
 	return &Response{
-		ID:           reply.ID,
-		Model:        reply.Model,
-		Message:      Message{Role: RoleAssistant, Content: first.Message.Content},
+		ID:    reply.ID,
+		Model: reply.Model,
+		Message: Message{
+			Role:      RoleAssistant,
+			Content:   first.Message.Content,
+			ToolCalls: toolCalls(first.Message.ToolCalls),
+		},
 		Reasoning:    first.Message.thinking(),
 		FinishReason: first.FinishReason,
 		Usage:        reply.Usage.toUsage(),
