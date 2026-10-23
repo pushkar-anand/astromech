@@ -73,6 +73,24 @@ func (c *Client) Stream(ctx context.Context, req CompletionRequest) iter.Seq[Eve
 
 			chunk := event.Data
 
+			// Recorded before the choices check: usage and timings come on
+			// the last chunk, which has no choices.
+			if resp.ID == "" {
+				resp.ID = chunk.ID
+			}
+
+			if resp.Model == "" {
+				resp.Model = chunk.Model
+			}
+
+			if chunk.Usage != nil {
+				resp.Usage = *chunk.Usage
+			}
+
+			if chunk.Stats != nil {
+				resp.Stats = chunk.Stats
+			}
+
 			if len(chunk.Choices) == 0 {
 				continue
 			}
@@ -81,12 +99,18 @@ func (c *Client) Stream(ctx context.Context, req CompletionRequest) iter.Seq[Eve
 
 			if choice.Delta.ReasoningContent != "" {
 				reasoning.WriteString(choice.Delta.ReasoningContent)
-				yield(ReasoningDelta{Text: choice.Delta.ReasoningContent})
+
+				if !yield(ReasoningDelta{Text: choice.Delta.ReasoningContent}) {
+					return
+				}
 			}
 
 			if choice.Delta.Content != "" {
 				text.WriteString(choice.Delta.Content)
-				yield(TextDelta{Text: choice.Delta.Content})
+
+				if !yield(TextDelta{Text: choice.Delta.Content}) {
+					return
+				}
 			}
 
 			if choice.FinishReason != "" {
@@ -99,23 +123,20 @@ func (c *Client) Stream(ctx context.Context, req CompletionRequest) iter.Seq[Eve
 			return
 		}
 
-		resp = CompletionResponse{
-			ID:    "",
-			Model: "",
-			Choices: []Choice{
-				{
-					FinishReason: finish,
-					Index:        0,
-					Message: ResponseMessage{
-						Role:             RoleAssistant,
-						Content:          text.String(),
-						ReasoningContent: reasoning.String(),
-					},
+		// Only Choices is set here, so the ID, model, usage and stats
+		// recorded from the chunks are kept.
+		resp.Choices = []Choice{
+			{
+				FinishReason: finish,
+				Index:        0,
+				Message: ResponseMessage{
+					Role:             RoleAssistant,
+					Content:          text.String(),
+					ReasoningContent: reasoning.String(),
 				},
 			},
-			Stats: nil,
-			Usage: Usage{},
 		}
+
 		yield(Done{Response: &resp})
 	}
 }
