@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 )
@@ -71,6 +72,7 @@ type (
 		Role             Role   `json:"role"`
 		Content          string `json:"content"`
 		ReasoningContent string `json:"reasoning_content"`
+		Reasoning        string `json:"reasoning"`
 	}
 
 	choice struct {
@@ -86,6 +88,12 @@ type (
 		Stats   *Stats   `json:"timings,omitzero"`
 	}
 )
+
+// thinking returns the model's reasoning, which LLM backends send under
+// either name.
+func (m replyMessage) thinking() string {
+	return cmp.Or(m.ReasoningContent, m.Reasoning)
+}
 
 // Complete sends req and waits for the whole reply.
 func (c *Client) Complete(ctx context.Context, req Request) (*Response, error) {
@@ -104,7 +112,7 @@ func (c *Client) Complete(ctx context.Context, req Request) (*Response, error) {
 		ID:           reply.ID,
 		Model:        reply.Model,
 		Message:      Message{Role: RoleAssistant, Content: first.Message.Content},
-		Reasoning:    first.Message.ReasoningContent,
+		Reasoning:    first.Message.thinking(),
 		FinishReason: first.FinishReason,
 		Usage:        reply.Usage,
 		Stats:        reply.Stats,

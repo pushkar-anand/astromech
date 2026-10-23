@@ -106,10 +106,10 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 
 			choice := chunk.Choices[0]
 
-			if choice.Delta.ReasoningContent != "" {
-				reasoning.WriteString(choice.Delta.ReasoningContent)
+			if thought := choice.Delta.thinking(); thought != "" {
+				reasoning.WriteString(thought)
 
-				if !yield(ReasoningDelta{Text: choice.Delta.ReasoningContent}) {
+				if !yield(ReasoningDelta{Text: thought}) {
 					return
 				}
 			}

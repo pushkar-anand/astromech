@@ -110,6 +110,29 @@ func TestStreamWithoutUsage(t *testing.T) {
 	assert.Zero(t, done.Response.Usage)
 }
 
+func TestStreamReasoningField(t *testing.T) {
+	_, c := newBackend(t, map[string]reply{
+		"POST /v1/chat/completions": {body: sse(
+			`{"id":"r1","model":"model-a","choices":[{"index":0,"delta":{"reasoning":"They said "}}]}`,
+			`{"id":"r1","model":"model-a","choices":[{"index":0,"delta":{"reasoning":"hello."}}]}`,
+			chunkText, chunkStop,
+		)},
+	})
+
+	events := collect(t, c)
+	require.Len(t, events, 4)
+
+	assert.Equal(t, []llm.Event{
+		llm.ReasoningDelta{Text: "They said "},
+		llm.ReasoningDelta{Text: "hello."},
+		llm.TextDelta{Text: "Hi "},
+	}, events[:3])
+
+	done, ok := events[3].(llm.Done)
+	require.True(t, ok, "last event is %T, want llm.Done", events[3])
+	assert.Equal(t, "They said hello.", done.Response.Reasoning)
+}
+
 func TestStreamIncomplete(t *testing.T) {
 	_, c := newBackend(t, map[string]reply{
 		// No finish_reason and no [DONE]: the connection dropped mid-reply.

@@ -66,6 +66,20 @@ func TestCompleteWithoutStats(t *testing.T) {
 	assert.Nil(t, resp.Stats)
 }
 
+func TestCompleteReasoningField(t *testing.T) {
+	_, c := newBackend(t, map[string]reply{
+		"POST /v1/chat/completions": {body: `{"id":"r1","model":"model-a","choices":[
+			{"finish_reason":"stop","message":{"role":"assistant","content":"Hi","reasoning":"They said hello."}}
+		]}`},
+	})
+
+	resp, err := c.Complete(t.Context(), hello)
+	require.NoError(t, err)
+
+	assert.Equal(t, "Hi", resp.Message.Content)
+	assert.Equal(t, "They said hello.", resp.Reasoning)
+}
+
 func TestCompleteWaitsForSlowModel(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		_, c := newBackend(t, map[string]reply{
