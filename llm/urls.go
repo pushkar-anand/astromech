@@ -1,5 +1,6 @@
 package llm
 
 const (
-	modelsPath = "/models"
+	modelsPath         = "/models"
+	chatCompletionPath = "/chat/completions"
 )
