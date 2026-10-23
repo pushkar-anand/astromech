@@ -21,9 +21,10 @@ func New(baseURL string, apiKey secret.Secret[string]) (*Client, error) {
 
 	opts := []client.Option{
 		client.WithBaseURL(baseURL),
-		// A model can take minutes to answer; callers bound a call
-		// with its context instead.
+		// A model can take minutes to answer, or to load before a stream
+		// starts; callers bound a call with its context instead.
 		client.WithTimeout(0),
+		client.WithResponseHeaderTimeout(0),
 	}
 
 	// Only pass the API key if it's not empty
