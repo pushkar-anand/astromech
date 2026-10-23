@@ -115,43 +115,69 @@ func TestLLMLive(t *testing.T) {
 	})
 
 	t.Run("test completions with tool calling", func(t *testing.T) {
-		const model = "google/gemma-4-E4B-it-qat-q4_0-gguf"
+		toolRoundTrip(t, func(req Request) *Response {
+			resp, err := client.Complete(t.Context(), req)
+			require.NoError(t, err)
 
-		add := Tool{
-			Name:        "add",
-			Description: "Adds two integers.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"a": map[string]any{"type": "integer"},
-					"b": map[string]any{"type": "integer"},
-				},
-				"required": []string{"a", "b"},
-			},
-		}
-
-		history := []Message{{Role: RoleUser, Content: "Use the add tool: what is 2 + 2?"}}
-
-		first, err := client.Complete(t.Context(), Request{Model: model, Messages: history, Tools: []Tool{add}})
-		require.NoError(t, err)
-
-		t.Logf("finish %q, content %q, calls %+v", first.FinishReason, first.Message.Content, first.Message.ToolCalls)
-
-		// The finish reason is not reliable: some LLM backends say "stop"
-		// even when they call a tool.
-		if len(first.Message.ToolCalls) == 0 {
-			t.Skip("the model answered without calling the tool; is the LLM backend running with --jinja?")
-		}
-
-		history = append(history, first.Message)
-		for _, call := range first.Message.ToolCalls {
-			history = append(history, Message{Role: RoleTool, ToolCallID: call.ID, Content: "4"})
-		}
-
-		second, err := client.Complete(t.Context(), Request{Model: model, Messages: history, Tools: []Tool{add}})
-		require.NoError(t, err)
-
-		t.Logf("finish %q, answer %q", second.FinishReason, second.Message.Content)
-		assert.NotEmpty(t, second.Message.Content)
+			return resp
+		})
 	})
+
+	t.Run("test stream with tool calling", func(t *testing.T) {
+		toolRoundTrip(t, func(req Request) *Response {
+			for ev := range client.Stream(t.Context(), req) {
+				switch e := ev.(type) {
+				case Done:
+					return e.Response
+				case Failed:
+					require.NoError(t, e.Err)
+				}
+			}
+
+			t.Fatal("the stream ended without a Done event")
+
+			return nil
+		})
+	})
+}
+
+// toolRoundTrip offers the model an add tool, answers the calls it makes,
+// and checks that it then replies in text. send makes one request.
+func toolRoundTrip(t *testing.T, send func(Request) *Response) {
+	t.Helper()
+
+	const model = "google/gemma-4-E4B-it-qat-q4_0-gguf"
+
+	add := Tool{
+		Name:        "add",
+		Description: "Adds two integers.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"a": map[string]any{"type": "integer"},
+				"b": map[string]any{"type": "integer"},
+			},
+			"required": []string{"a", "b"},
+		},
+	}
+
+	history := []Message{{Role: RoleUser, Content: "Use the add tool: what is 2 + 2?"}}
+
+	first := send(Request{Model: model, Messages: history, Tools: []Tool{add}})
+	t.Logf("finish %q, content %q, calls %+v", first.FinishReason, first.Message.Content, first.Message.ToolCalls)
+
+	// The finish reason is not reliable: some LLM backends say "stop" even
+	// when they call a tool.
+	if len(first.Message.ToolCalls) == 0 {
+		t.Skip("the model answered without calling the tool; is the LLM backend running with --jinja?")
+	}
+
+	history = append(history, first.Message)
+	for _, call := range first.Message.ToolCalls {
+		history = append(history, Message{Role: RoleTool, ToolCallID: call.ID, Content: "4"})
+	}
+
+	second := send(Request{Model: model, Messages: history, Tools: []Tool{add}})
+	t.Logf("finish %q, answer %q", second.FinishReason, second.Message.Content)
+	assert.NotEmpty(t, second.Message.Content)
 }

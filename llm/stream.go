@@ -63,6 +63,12 @@ func (ReasoningDelta) event() {}
 func (Done) event()           {}
 func (Failed) event()         {}
 
+// pendingCall is a tool call being put back together from stream pieces.
+type pendingCall struct {
+	id, name string
+	args     strings.Builder
+}
+
 // Stream sends req and yields the reply as it arrives. Stopping the loop
 // early cancels the request.
 func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
@@ -78,6 +84,9 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 		var (
 			text, reasoning strings.Builder
 			resp            Response
+
+			calls []*pendingCall           // in the order they started
+			byIdx = map[int]*pendingCall{} // the latest call at each index
 		)
 
 		for event, err := range stream {
@@ -128,6 +137,22 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 				}
 			}
 
+			for _, piece := range choice.Delta.ToolCalls {
+				call := byIdx[piece.Index]
+
+				// Some LLM backends send every call at index 0, told apart
+				// only by id.
+				if call == nil || (piece.ID != "" && call.id != "" && piece.ID != call.id) {
+					call = &pendingCall{}
+					calls = append(calls, call)
+					byIdx[piece.Index] = call
+				}
+
+				call.id = cmp.Or(call.id, piece.ID)
+				call.name = cmp.Or(call.name, piece.Function.Name)
+				call.args.WriteString(piece.Function.Arguments)
+			}
+
 			if choice.FinishReason != "" {
 				resp.FinishReason = choice.FinishReason
 			}
@@ -138,7 +163,16 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 			return
 		}
 
-		resp.Message = Message{Role: RoleAssistant, Content: text.String()}
+		wire := make([]replyToolCall, len(calls))
+		for i, c := range calls {
+			wire[i] = replyToolCall{ID: c.id, Function: wireFunction{Name: c.name, Arguments: c.args.String()}}
+		}
+
+		resp.Message = Message{
+			Role:      RoleAssistant,
+			Content:   text.String(),
+			ToolCalls: toolCalls(wire),
+		}
 		resp.Reasoning = reasoning.String()
 
 		yield(Done{Response: &resp})

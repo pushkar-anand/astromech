@@ -229,3 +229,147 @@ func TestStreamStopsEarly(t *testing.T) {
 		}
 	})
 }
+
+// toolChunk is a stream chunk carrying tool-call pieces.
+func toolChunk(pieces ...string) string {
+	return `{"choices":[{"index":0,"delta":{"tool_calls":[` + strings.Join(pieces, ",") + `]}}]}`
+}
+
+const chunkToolStop = `{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`
+
+// streamDone collects a stream and returns its Done response, failing the
+// test if it ended any other way.
+func streamDone(t *testing.T, c *llm.Client) ([]llm.Event, *llm.Response) {
+	t.Helper()
+
+	events := collect(t, c)
+	require.NotEmpty(t, events)
+
+	done, ok := events[len(events)-1].(llm.Done)
+	require.True(t, ok, "last event is %#v, want llm.Done", events[len(events)-1])
+
+	return events[:len(events)-1], done.Response
+}
+
+func TestStreamToolCallPieces(t *testing.T) {
+	_, c := newBackend(t, map[string]reply{
+		"POST /v1/chat/completions": {body: sse(
+			toolChunk(`{"index":0,"id":"call_1","type":"function","function":{"name":"get_time","arguments":""}}`),
+			toolChunk(`{"index":0,"function":{"arguments":"{\"zone\""}}`),
+			toolChunk(`{"index":0,"function":{"arguments":":\"UTC\"}"}}`),
+			chunkToolStop,
+		)},
+	})
+
+	deltas, resp := streamDone(t, c)
+
+	assert.Empty(t, deltas, "a reply with only a tool call has no text")
+	assert.Equal(t, "tool_calls", resp.FinishReason)
+	assert.Equal(t, llm.Message{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{ID: "call_1", Name: "get_time", Arguments: `{"zone":"UTC"}`}},
+	}, resp.Message)
+}
+
+func TestStreamToolCallsInterleaved(t *testing.T) {
+	_, c := newBackend(t, map[string]reply{
+		"POST /v1/chat/completions": {body: sse(
+			toolChunk(`{"index":0,"id":"call_1","type":"function","function":{"name":"get_time","arguments":""}}`),
+			toolChunk(`{"index":0,"function":{"arguments":"{\"zone\""}}`),
+			toolChunk(`{"index":1,"id":"call_2","type":"function","function":{"name":"now","arguments":"{}"}}`),
+			toolChunk(`{"index":0,"function":{"arguments":":\"UTC\"}"}}`),
+			chunkToolStop,
+		)},
+	})
+
+	_, resp := streamDone(t, c)
+
+	assert.Equal(t, []llm.ToolCall{
+		{ID: "call_1", Name: "get_time", Arguments: `{"zone":"UTC"}`},
+		{ID: "call_2", Name: "now", Arguments: "{}"},
+	}, resp.Message.ToolCalls)
+}
+
+func TestStreamWholeToolCalls(t *testing.T) {
+	_, c := newBackend(t, map[string]reply{
+		"POST /v1/chat/completions": {body: sse(
+			toolChunk(
+				`{"index":0,"id":"call_1","type":"function","function":{"name":"get_time","arguments":"{\"zone\":\"UTC\"}"}}`,
+				`{"index":1,"id":"call_2","type":"function","function":{"name":"now","arguments":"{}"}}`,
+			),
+			chunkToolStop,
+		)},
+	})
+
+	_, resp := streamDone(t, c)
+
+	assert.Equal(t, []llm.ToolCall{
+		{ID: "call_1", Name: "get_time", Arguments: `{"zone":"UTC"}`},
+		{ID: "call_2", Name: "now", Arguments: "{}"},
+	}, resp.Message.ToolCalls)
+}
+
+func TestStreamToolCallsReuseIndex(t *testing.T) {
+	_, c := newBackend(t, map[string]reply{
+		// Both calls at index 0, told apart only by id. The name is sent
+		// with every piece, and must not be repeated.
+		"POST /v1/chat/completions": {body: sse(
+			toolChunk(`{"index":0,"id":"call_1","type":"function","function":{"name":"get_time","arguments":"{\"zone\":"}}`),
+			toolChunk(`{"index":0,"id":"call_1","type":"function","function":{"name":"get_time","arguments":"\"UTC\"}"}}`),
+			toolChunk(`{"index":0,"id":"call_2","type":"function","function":{"name":"get_time","arguments":"{\"zone\":"}}`),
+			toolChunk(`{"index":0,"id":"call_2","type":"function","function":{"name":"get_time","arguments":"\"Asia/Tokyo\"}"}}`),
+			chunkToolStop,
+		)},
+	})
+
+	_, resp := streamDone(t, c)
+
+	assert.Equal(t, []llm.ToolCall{
+		{ID: "call_1", Name: "get_time", Arguments: `{"zone":"UTC"}`},
+		{ID: "call_2", Name: "get_time", Arguments: `{"zone":"Asia/Tokyo"}`},
+	}, resp.Message.ToolCalls)
+}
+
+func TestStreamToolCallQuirks(t *testing.T) {
+	_, c := newBackend(t, map[string]reply{
+		"POST /v1/chat/completions": {body: sse(
+			toolChunk(`{"index":0,"type":"function","function":{"name":"now","arguments":""}}`),
+			chunkToolStop,
+		)},
+	})
+
+	_, resp := streamDone(t, c)
+
+	assert.Equal(t, []llm.ToolCall{{ID: "call_0", Name: "now", Arguments: "{}"}}, resp.Message.ToolCalls)
+}
+
+func TestStreamTextThenToolCall(t *testing.T) {
+	_, c := newBackend(t, map[string]reply{
+		"POST /v1/chat/completions": {body: sse(
+			chunkText,
+			toolChunk(`{"index":0,"id":"call_1","type":"function","function":{"name":"now","arguments":"{}"}}`),
+			chunkToolStop,
+		)},
+	})
+
+	deltas, resp := streamDone(t, c)
+
+	assert.Equal(t, []llm.Event{llm.TextDelta{Text: "Hi "}}, deltas)
+	assert.Equal(t, "Hi ", resp.Message.Content)
+	assert.Equal(t, []llm.ToolCall{{ID: "call_1", Name: "now", Arguments: "{}"}}, resp.Message.ToolCalls)
+}
+
+func TestStreamToolCallCutOff(t *testing.T) {
+	_, c := newBackend(t, map[string]reply{
+		// The connection drops partway through the arguments.
+		"POST /v1/chat/completions": {body: "data: " +
+			toolChunk(`{"index":0,"id":"call_1","type":"function","function":{"name":"get_time","arguments":"{\"zone\""}}`) + "\n\n"},
+	})
+
+	events := collect(t, c)
+	require.Len(t, events, 1)
+
+	failed, ok := events[0].(llm.Failed)
+	require.True(t, ok, "event is %#v, want llm.Failed", events[0])
+	assert.ErrorIs(t, failed.Err, llm.ErrIncompleteStream)
+}
