@@ -2,16 +2,14 @@ package llm
 
 import "cmp"
 
-type (
-	// Request is one call to a model.
-	Request struct {
-		Model    string
-		Messages []Message
+// Request is one call to a model.
+type Request struct {
+	Model    string
+	Messages []Message
 
-		// Tools are the tools the model may ask to call.
-		Tools []Tool
-	}
-)
+	// Tools are the tools the model may ask to call.
+	Tools []Tool
+}
 
 // Wire format of a request.
 type (
