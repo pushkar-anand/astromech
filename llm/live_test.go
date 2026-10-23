@@ -20,10 +20,7 @@ func TestLLMLive(t *testing.T) {
 
 	t.Setenv("DEBUG_ASTROMECH", "true")
 
-	client, err := NewClient(
-		baseURL,
-		secret.New(apiKey),
-	)
+	client, err := New(baseURL, secret.New(apiKey))
 	require.NoError(t, err)
 
 	t.Run("test models endpoint", func(t *testing.T) {
@@ -33,24 +30,23 @@ func TestLLMLive(t *testing.T) {
 	})
 
 	t.Run("test completions endpoint", func(t *testing.T) {
-		result, err := client.Complete(t.Context(), CompletionRequest{
+		result, err := client.Complete(t.Context(), Request{
 			Model: "google/gemma-4-E4B-it-qat-q4_0-gguf",
 			Messages: []Message{
 				{
-					Role:    "system",
+					Role:    RoleSystem,
 					Content: "You are a helpful assistant.",
 				},
 				{
-					Role:    "user",
+					Role:    RoleUser,
 					Content: "What is the capital of France?",
 				},
 			},
 		})
-		assert.NoError(t, err)
-		assert.NotEmpty(t, result)
-		assert.NotEmpty(t, result.Choices)
+		require.NoError(t, err)
+		assert.NotEmpty(t, result.Message.Content)
 
-		t.Log(result.Choices[0].Message.Content)
+		t.Log(result.Message.Content)
 	})
 
 	t.Run("test stream response", func(t *testing.T) {
@@ -58,25 +54,25 @@ func TestLLMLive(t *testing.T) {
 		// subtest uses a client without it.
 		t.Setenv("DEBUG_ASTROMECH", "false")
 
-		client, err := NewClient(baseURL, secret.New(apiKey))
+		client, err := New(baseURL, secret.New(apiKey))
 		require.NoError(t, err)
 
-		stream := client.Stream(t.Context(), CompletionRequest{
+		stream := client.Stream(t.Context(), Request{
 			Model: "google/gemma-4-E4B-it-qat-q4_0-gguf",
 			Messages: []Message{
 				{
-					Role:    "system",
+					Role:    RoleSystem,
 					Content: "You are a helpful assistant.",
 				},
 				{
-					Role:    "user",
+					Role:    RoleUser,
 					Content: "Give me 10 lines about you",
 				},
 			},
 		})
 
 		var (
-			done                *CompletionResponse
+			done                *Response
 			section             string
 			reasoningN, answerN int
 		)
@@ -111,13 +107,10 @@ func TestLLMLive(t *testing.T) {
 		fmt.Println()
 
 		require.NotNil(t, done, "the stream ended without a Done event")
-		require.NotEmpty(t, done.Choices)
+		assert.NotEmpty(t, done.Message.Content)
 
-		msg := done.Choices[0].Message
-		assert.NotEmpty(t, msg.Content)
-
-		t.Logf("%d reasoning deltas, %d answer deltas, finish %q", reasoningN, answerN, done.Choices[0].FinishReason)
-		t.Logf("assembled answer is %d bytes, reasoning %d bytes", len(msg.Content), len(msg.ReasoningContent))
+		t.Logf("%d reasoning deltas, %d answer deltas, finish %q", reasoningN, answerN, done.FinishReason)
+		t.Logf("assembled answer is %d bytes, reasoning %d bytes", len(done.Message.Content), len(done.Reasoning))
 		t.Logf("usage %+v, stats %+v", done.Usage, done.Stats)
 	})
 }

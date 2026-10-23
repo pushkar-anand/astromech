@@ -10,23 +10,27 @@ import (
 	"github.com/pushkar-anand/build-with-go/http/client"
 )
 
-const streamEndKeyword = "[DONE]"
+// streamEnd is the data of the event that ends a stream.
+const streamEnd = "[DONE]"
 
+// Wire format of a stream.
 type (
-	StreamRequest struct {
-		CompletionRequest
-		Stream  bool `json:"stream"`
-		Options struct {
-			IncludeUsage bool `json:"include_usage"`
-		} `json:"stream_options"`
+	streamRequest struct {
+		Request
+		Stream        bool           `json:"stream"`
+		StreamOptions *streamOptions `json:"stream_options,omitzero"`
+	}
+
+	streamOptions struct {
+		IncludeUsage bool `json:"include_usage"`
 	}
 
 	streamChunk struct {
 		ID      string `json:"id"`
 		Model   string `json:"model"`
 		Choices []struct {
-			Delta        ResponseMessage `json:"delta"`
-			FinishReason string          `json:"finish_reason"`
+			Delta        replyMessage `json:"delta"`
+			FinishReason string       `json:"finish_reason"`
 		} `json:"choices"`
 		Usage *Usage `json:"usage,omitzero"`
 		Stats *Stats `json:"timings,omitzero"`
@@ -34,12 +38,22 @@ type (
 )
 
 type (
+	// Event is one step of a streamed reply. A stream yields any number of
+	// deltas, then exactly one [Done] or [Failed], unless the caller stops
+	// reading first.
 	Event interface{ event() }
 
-	TextDelta      struct{ Text string }
+	// TextDelta is the next piece of the reply.
+	TextDelta struct{ Text string }
+
+	// ReasoningDelta is the next piece of the model's thinking.
 	ReasoningDelta struct{ Text string }
-	Done           struct{ Response *CompletionResponse } // the whole reply, assembled
-	Failed         struct{ Err error }
+
+	// Done ends a stream that finished, with the whole reply.
+	Done struct{ Response *Response }
+
+	// Failed ends a stream that did not finish.
+	Failed struct{ Err error }
 )
 
 func (TextDelta) event()      {}
@@ -47,22 +61,21 @@ func (ReasoningDelta) event() {}
 func (Done) event()           {}
 func (Failed) event()         {}
 
-func (c *Client) Stream(ctx context.Context, req CompletionRequest) iter.Seq[Event] {
+// Stream sends req and yields the reply as it arrives. Stopping the loop
+// early cancels the request.
+func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 	return func(yield func(Event) bool) {
-		sreq := StreamRequest{
-			CompletionRequest: req,
-			Stream:            true,
-			Options: struct {
-				IncludeUsage bool `json:"include_usage"`
-			}{IncludeUsage: true},
+		sreq := streamRequest{
+			Request:       req,
+			Stream:        true,
+			StreamOptions: &streamOptions{IncludeUsage: true},
 		}
 
-		stream := c.httpClient.Stream[streamChunk](ctx, http.MethodPost, chatCompletionPath, sreq, client.WithStreamEnd(streamEndKeyword))
+		stream := c.httpClient.Stream[streamChunk](ctx, http.MethodPost, chatCompletionPath, sreq, client.WithStreamEnd(streamEnd))
 
 		var (
 			text, reasoning strings.Builder
-			resp            CompletionResponse
-			finish          string
+			resp            Response
 		)
 
 		for event, err := range stream {
@@ -114,28 +127,17 @@ func (c *Client) Stream(ctx context.Context, req CompletionRequest) iter.Seq[Eve
 			}
 
 			if choice.FinishReason != "" {
-				finish = choice.FinishReason
+				resp.FinishReason = choice.FinishReason
 			}
 		}
 
-		if finish == "" {
+		if resp.FinishReason == "" {
 			yield(Failed{Err: ErrIncompleteStream})
 			return
 		}
 
-		// Only Choices is set here, so the ID, model, usage and stats
-		// recorded from the chunks are kept.
-		resp.Choices = []Choice{
-			{
-				FinishReason: finish,
-				Index:        0,
-				Message: ResponseMessage{
-					Role:             RoleAssistant,
-					Content:          text.String(),
-					ReasoningContent: reasoning.String(),
-				},
-			},
-		}
+		resp.Message = Message{Role: RoleAssistant, Content: text.String()}
+		resp.Reasoning = reasoning.String()
 
 		yield(Done{Response: &resp})
 	}

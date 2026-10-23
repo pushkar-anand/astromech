@@ -9,14 +9,14 @@ import (
 	"github.com/pushkar-anand/build-with-go/secret"
 )
 
+// Client sends requests to one LLM backend.
+// It is safe for concurrent use.
 type Client struct {
 	httpClient *client.Client
 }
 
-func NewClient(
-	baseURL string,
-	apiKey secret.Secret[string],
-) (*Client, error) {
+// New returns a Client for talking to LLM backend.
+func New(baseURL string, apiKey secret.Secret[string]) (*Client, error) {
 	isDebug := os.Getenv("DEBUG_ASTROMECH") == "true"
 
 	opts := []client.Option{
@@ -37,7 +37,7 @@ func NewClient(
 
 	c, err := client.New(opts...)
 	if err != nil {
-		return nil, fmt.Errorf("llm: failed to create client: %w", err)
+		return nil, fmt.Errorf("llm: create client: %w", err)
 	}
 
 	return &Client{
