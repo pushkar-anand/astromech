@@ -149,6 +149,29 @@ func TestStreamIncomplete(t *testing.T) {
 	assert.ErrorIs(t, failed.Err, llm.ErrIncompleteStream)
 }
 
+func TestStreamErrorMidway(t *testing.T) {
+	_, c := newBackend(t, map[string]reply{
+		"POST /v1/chat/completions": {body: sse(
+			chunkText,
+			`{"error":{"code":500,"message":"out of memory","type":"server_error"}}`,
+			chunkText2, chunkStop,
+		)},
+	})
+
+	events := collect(t, c)
+	require.Len(t, events, 2)
+
+	assert.Equal(t, llm.TextDelta{Text: "Hi "}, events[0])
+
+	failed, ok := events[1].(llm.Failed)
+	require.True(t, ok, "last event is %T, want llm.Failed", events[1])
+
+	var backendErr *llm.BackendError
+	require.ErrorAs(t, failed.Err, &backendErr)
+	assert.Equal(t, &llm.BackendError{Message: "out of memory", Type: "server_error"}, backendErr)
+	assert.EqualError(t, failed.Err, "llm: the LLM backend failed: out of memory")
+}
+
 func TestStreamError(t *testing.T) {
 	_, c := newBackend(t, map[string]reply{
 		"POST /v1/chat/completions": {status: http.StatusNotFound, body: errorBody},

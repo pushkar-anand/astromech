@@ -33,8 +33,9 @@ type (
 			Delta        replyMessage `json:"delta"`
 			FinishReason string       `json:"finish_reason"`
 		} `json:"choices"`
-		Usage *Usage `json:"usage,omitzero"`
-		Stats *Stats `json:"timings,omitzero"`
+		Usage *Usage        `json:"usage,omitzero"`
+		Stats *Stats        `json:"timings,omitzero"`
+		Error *BackendError `json:"error,omitzero"`
 	}
 )
 
@@ -86,6 +87,11 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 			}
 
 			chunk := event.Data
+
+			if chunk.Error != nil {
+				yield(Failed{Err: chunk.Error})
+				return
+			}
 
 			// Recorded before the choices check: usage and timings come on
 			// the last chunk, which has no choices.
