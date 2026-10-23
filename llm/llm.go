@@ -17,11 +17,18 @@ func NewClient(
 	baseURL string,
 	apiKey secret.Secret[string],
 ) (*Client, error) {
-	c, err := client.New(
+	isDebug := os.Getenv("DEBUG") == "true"
+
+	opts := []client.Option{
 		client.WithBaseURL(baseURL),
 		client.WithTokenSource(transport.StaticToken(apiKey)),
-		client.WithDebug(os.Stdout),
-	)
+	}
+
+	if isDebug {
+		opts = append(opts, client.WithDebug(os.Stdout))
+	}
+
+	c, err := client.New(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("llm: failed to create client: %w", err)
 	}
