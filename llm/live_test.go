@@ -17,7 +17,7 @@ func TestLLMLive(t *testing.T) {
 		t.Skip("LLM_BASE_URL and LLM_API_KEY environment variables must be set for live tests")
 	}
 
-	t.Setenv("DEBUG", "true")
+	t.Setenv("DEBUG_ASTROMECH", "true")
 
 	client, err := NewClient(
 		baseURL,

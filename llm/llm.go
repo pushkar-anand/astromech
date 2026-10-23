@@ -17,7 +17,7 @@ func NewClient(
 	baseURL string,
 	apiKey secret.Secret[string],
 ) (*Client, error) {
-	isDebug := os.Getenv("DEBUG") == "true"
+	isDebug := os.Getenv("DEBUG_ASTROMECH") == "true"
 
 	opts := []client.Option{
 		client.WithBaseURL(baseURL),
