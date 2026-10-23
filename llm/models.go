@@ -9,7 +9,7 @@ type (
 	Model struct {
 		ID            string `json:"id"`
 		Name          string `json:"name"`
-		Created       int    `json:"created"`
+		Created       int64  `json:"created"`
 		Description   string `json:"description"`
 		ContextLength int    `json:"context_length,omitempty"`
 	}
