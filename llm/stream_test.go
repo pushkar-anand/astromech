@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -41,12 +42,7 @@ var (
 func collect(t *testing.T, c *llm.Client) []llm.Event {
 	t.Helper()
 
-	var events []llm.Event
-	for ev := range c.Stream(t.Context(), hello) {
-		events = append(events, ev)
-	}
-
-	return events
+	return slices.Collect(c.Stream(t.Context(), hello))
 }
 
 func TestStream(t *testing.T) {

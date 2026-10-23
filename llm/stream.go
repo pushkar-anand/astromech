@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"iter"
@@ -88,13 +89,8 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 
 			// Recorded before the choices check: usage and timings come on
 			// the last chunk, which has no choices.
-			if resp.ID == "" {
-				resp.ID = chunk.ID
-			}
-
-			if resp.Model == "" {
-				resp.Model = chunk.Model
-			}
+			resp.ID = cmp.Or(resp.ID, chunk.ID)
+			resp.Model = cmp.Or(resp.Model, chunk.Model)
 
 			if chunk.Usage != nil {
 				resp.Usage = *chunk.Usage
