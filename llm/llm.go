@@ -21,7 +21,14 @@ func NewClient(
 
 	opts := []client.Option{
 		client.WithBaseURL(baseURL),
-		client.WithTokenSource(transport.StaticToken(apiKey)),
+		// A model can take minutes to answer; callers bound a call
+		// with its context instead.
+		client.WithTimeout(0),
+	}
+
+	// Only pass the API key if it's not empty
+	if apiKey.Reveal() != "" {
+		opts = append(opts, client.WithTokenSource(transport.StaticToken(apiKey)))
 	}
 
 	if isDebug {

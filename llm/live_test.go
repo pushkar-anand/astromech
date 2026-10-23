@@ -13,8 +13,8 @@ func TestLLMLive(t *testing.T) {
 	baseURL := os.Getenv("LLM_BASE_URL")
 	apiKey := os.Getenv("LLM_API_KEY")
 
-	if baseURL == "" || apiKey == "" {
-		t.Skip("LLM_BASE_URL and LLM_API_KEY environment variables must be set for live tests")
+	if baseURL == "" {
+		t.Skip("set LLM_BASE_URL, and LLM_API_KEY if the server needs one, to run live tests")
 	}
 
 	t.Setenv("DEBUG_ASTROMECH", "true")

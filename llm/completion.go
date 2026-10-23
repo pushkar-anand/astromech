@@ -54,23 +54,10 @@ type (
 		ID      string   `json:"id"`
 		Model   string   `json:"model"`
 		Choices []Choice `json:"choices"`
+		Stats   *Stats   `json:"timings,omitzero"`
+		Usage   Usage    `json:"usage"`
 	}
 )
-
-type T struct {
-	Choices []struct {
-		FinishReason string          `json:"finish_reason"`
-		Index        int             `json:"index"`
-		Message      ResponseMessage `json:"message"`
-	} `json:"choices"`
-	Created           int    `json:"created"`
-	Model             string `json:"model"`
-	SystemFingerprint string `json:"system_fingerprint"`
-	Object            string `json:"object"`
-	Usage             Usage  `json:"usage"`
-	Id                string `json:"id"`
-	Timings           Stats  `json:"timings"`
-}
 
 func (c *Client) Complete(ctx context.Context, msg CompletionRequest) (*CompletionResponse, error) {
 	result, err := c.httpClient.Post[CompletionResponse, CompletionRequest](ctx, chatCompletionPath, msg)
@@ -81,8 +68,6 @@ func (c *Client) Complete(ctx context.Context, msg CompletionRequest) (*Completi
 	if len(result.Choices) == 0 {
 		return nil, fmt.Errorf("llm: no choices returned")
 	}
-
-	fmt.Println(result.Choices[0].Message.Content)
 
 	return &result, nil
 }
