@@ -31,7 +31,7 @@ OpenRouter, LiteLLM, vLLM, Ollama and LM Studio among them.
 | `make cover`             | Tests with a coverage profile and summary          |
 | `make vet` / `make lint` | `go vet` / `staticcheck`                           |
 | `make fmt`               | `go fmt` + `goimports` (what the CI autoformatter runs) |
-| `make tidy`              | Sync `go.mod`                                      |
+| `make tidy`              | Sync `go.mod` (root and `tools/`)                  |
 
 ## CI
 

@@ -1,6 +1,7 @@
 GO      ?= go
 TAGS    ?=
 GOFLAGS  = $(if $(TAGS),-tags $(TAGS))
+TOOL     = $(GO) tool -modfile=tools/go.mod
 
 .PHONY: help tidy fmt vet lint test cover clean
 
@@ -8,16 +9,16 @@ help: ## Show this help
 	@grep -hE '^[a-z_]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 tidy: ## Sync go.mod/go.sum
-	$(GO) mod tidy
+	$(GO) mod tidy && cd tools && $(GO) mod tidy
 
 fmt: ## Format the tree (used by the autoformat workflow)
-	$(GO) fmt ./... && $(GO) tool goimports -w .
+	$(GO) fmt ./... && $(TOOL) goimports -w .
 
 vet: ## Run go vet
 	$(GO) vet $(GOFLAGS) ./...
 
 lint: ## Run staticcheck
-	$(GO) tool staticcheck $(GOFLAGS) ./...
+	$(TOOL) staticcheck $(GOFLAGS) ./...
 
 test: ## Run the test suite with the race detector
 	$(GO) test $(GOFLAGS) -race -count=1 ./...
