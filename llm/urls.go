@@ -3,4 +3,5 @@ package llm
 const (
 	modelsPath         = "/models"
 	chatCompletionPath = "/chat/completions"
+	embeddingsPath     = "/embeddings"
 )

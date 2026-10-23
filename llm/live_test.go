@@ -2,6 +2,7 @@ package llm
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"testing"
 
@@ -139,6 +140,47 @@ func TestLLMLive(t *testing.T) {
 			return nil
 		})
 	})
+
+	t.Run("test embeddings", func(t *testing.T) {
+		// The debug dump would print every number of every vector.
+		t.Setenv("DEBUG_ASTROMECH", "false")
+
+		client, err := New(baseURL, secret.New(apiKey))
+		require.NoError(t, err)
+
+		// EmbeddingGemma expects a task prefix on queries and on the
+		// documents searched; see its model card.
+		resp, err := client.Embed(t.Context(), EmbedRequest{
+			Model: "ggml-org/embeddinggemma-2-GGUF",
+			Input: []string{
+				"task: search result | query: is it going to rain today?",
+				"title: none | text: get_weather: current weather and forecast for a city",
+				"title: none | text: read_file: read a file from the project directory",
+			},
+		})
+		require.NoError(t, err)
+		require.Len(t, resp.Vectors, 3)
+
+		query, weather, file := resp.Vectors[0], resp.Vectors[1], resp.Vectors[2]
+		require.Len(t, weather, len(query))
+
+		t.Logf("model %q, %d dimensions, usage %+v", resp.Model, len(query), resp.Usage)
+		t.Logf("similarity to the weather tool %.3f, to the file tool %.3f", cosine(query, weather), cosine(query, file))
+
+		assert.Greater(t, cosine(query, weather), cosine(query, file))
+	})
+}
+
+// cosine is the cosine similarity of two vectors of the same length.
+func cosine(a, b []float32) float64 {
+	var dot, na, nb float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		na += float64(a[i]) * float64(a[i])
+		nb += float64(b[i]) * float64(b[i])
+	}
+
+	return dot / (math.Sqrt(na) * math.Sqrt(nb))
 }
 
 // toolRoundTrip offers the model an add tool, answers the calls it makes,
