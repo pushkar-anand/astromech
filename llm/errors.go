@@ -58,8 +58,8 @@ func (e *BackendError) Unwrap() error {
 // explain replaces an error response with a BackendError when its body
 // says what went wrong, and returns other errors as they are.
 func explain(err error) error {
-	var status *client.StatusError
-	if !errors.As(err, &status) {
+	status, ok := errors.AsType[*client.StatusError](err)
+	if !ok {
 		return err
 	}
 

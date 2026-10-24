@@ -194,8 +194,7 @@ func TestLLMLive(t *testing.T) {
 			}},
 		})
 
-		var backendErr *BackendError
-		if errors.As(err, &backendErr) && backendErr.StatusCode < http.StatusInternalServerError {
+		if backendErr, ok := errors.AsType[*BackendError](err); ok && backendErr.StatusCode < http.StatusInternalServerError {
 			t.Skipf("the LLM backend refused the image; is llama.cpp running with --mmproj? %v", err)
 		}
 
