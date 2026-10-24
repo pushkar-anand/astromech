@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"encoding/json/jsontext"
+	"fmt"
 	"iter"
 	"slices"
 
@@ -60,6 +62,8 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 			}
 		}
 
+		tools, toolsMap := a.tools()
+
 		for i := 0; !a.shouldExitLoop(turn, i); i++ {
 			if a.System != "" {
 				current = append(current, *a.systemPrompt())
@@ -70,7 +74,7 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 			request := llm.Request{
 				Model:    a.ModelID,
 				Messages: current,
-				Tools:    a.tools(),
+				Tools:    tools,
 			}
 
 			var response *llm.Response
@@ -112,15 +116,15 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 					return
 				}
 
-				// TODO: run tool
+				result := callTool(ctx, toolsMap, toolCall)
 
-				if !yield(ToolFinished{Call: toolCall}) {
+				if !yield(ToolFinished{Call: toolCall, Result: result}) {
 					return
 				}
 
 				current = append(current, llm.Message{
 					Role:       llm.RoleTool,
-					Content:    "",
+					Content:    result.Content,
 					ToolCallID: toolCall.ID,
 				})
 			}
@@ -160,20 +164,46 @@ func (a *Agent) systemPrompt() *llm.Message {
 	return nil
 }
 
-func (a *Agent) tools() []llm.Tool {
+func (a *Agent) tools() ([]llm.Tool, map[string]Tool) {
 	if len(a.Tools) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	tools := make([]llm.Tool, len(a.Tools))
+	toolsMap := make(map[string]Tool)
 
 	for i, tool := range a.Tools {
 		tools[i] = tool.Def()
+		toolsMap[tool.Def().Name] = tool
 	}
 
-	return tools
+	return tools, toolsMap
 }
 
-func (a *Agent) callTool() {
+func callTool(ctx context.Context, toolsMap map[string]Tool, toolCall llm.ToolCall) Result {
+	t, ok := toolsMap[toolCall.Name]
+	if !ok {
+		return Result{
+			Content: fmt.Sprintf("tool not found: %s", toolCall.Name),
+			IsError: true,
+		}
+	}
 
+	args := jsontext.Value(cmp.Or(toolCall.Arguments, "{}"))
+	if !args.IsValid() {
+		return Result{
+			Content: fmt.Sprintf("invalid tool arguments: %s", toolCall.Name),
+			IsError: true,
+		}
+	}
+
+	result, err := t.Call(ctx, args)
+	if err != nil {
+		return Result{
+			Content: fmt.Sprintf("tool call failed: %s", err),
+			IsError: true,
+		}
+	}
+
+	return result
 }
