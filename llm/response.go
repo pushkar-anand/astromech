@@ -54,6 +54,18 @@ type (
 	}
 )
 
+// Add is u plus v, field by field: the usage of two requests together, such
+// as the rounds of one agent turn. TotalTokens is summed as reported, since
+// LLM backends differ in what they count into it.
+func (u Usage) Add(v Usage) Usage {
+	return Usage{
+		InputTokens:  u.InputTokens + v.InputTokens,
+		OutputTokens: u.OutputTokens + v.OutputTokens,
+		TotalTokens:  u.TotalTokens + v.TotalTokens,
+		CachedTokens: u.CachedTokens + v.CachedTokens,
+	}
+}
+
 // Wire format of a reply.
 type (
 	replyToolCall struct {
