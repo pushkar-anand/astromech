@@ -177,8 +177,9 @@ func (a *Agent) tools() ([]llm.Tool, map[string]Tool) {
 	toolsMap := make(map[string]Tool)
 
 	for i, tool := range a.Tools {
-		tools[i] = tool.Def()
-		toolsMap[tool.Def().Name] = tool
+		def := tool.Def()
+		tools[i] = def
+		toolsMap[def.Name] = tool
 	}
 
 	return tools, toolsMap
