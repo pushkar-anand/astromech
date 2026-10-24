@@ -88,8 +88,11 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 		stream := c.httpClient.Stream[streamChunk](ctx, http.MethodPost, chatCompletionPath, sreq, client.WithStreamEnd(streamEnd))
 
 		var (
+			// reply gathers the stream into the shape Complete reads, so
+			// both turn it into a Response the same way.
+			reply           completion
+			finishReason    string
 			text, reasoning strings.Builder
-			resp            Response
 
 			calls []*pendingCall           // in the order they started
 			byIdx = map[int]*pendingCall{} // the latest call at each index
@@ -110,24 +113,24 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 
 			// Recorded before the choices check: usage and timings come on
 			// the last chunk, which has no choices.
-			resp.ID = cmp.Or(resp.ID, chunk.ID)
-			resp.Model = cmp.Or(resp.Model, chunk.Model)
+			reply.ID = cmp.Or(reply.ID, chunk.ID)
+			reply.Model = cmp.Or(reply.Model, chunk.Model)
 
 			if chunk.Usage != nil {
-				resp.Usage = chunk.Usage.toUsage()
+				reply.Usage = *chunk.Usage
 			}
 
 			if chunk.Stats != nil {
-				resp.Stats = chunk.Stats
+				reply.Stats = chunk.Stats
 			}
 
 			if len(chunk.Choices) == 0 {
 				continue
 			}
 
-			choice := chunk.Choices[0]
+			first := chunk.Choices[0]
 
-			if thought := choice.Delta.thinking(); thought != "" {
+			if thought := first.Delta.thinking(); thought != "" {
 				reasoning.WriteString(thought)
 
 				if !yield(ReasoningDelta{Text: thought}) {
@@ -135,15 +138,15 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 				}
 			}
 
-			if choice.Delta.Content != "" {
-				text.WriteString(choice.Delta.Content)
+			if first.Delta.Content != "" {
+				text.WriteString(first.Delta.Content)
 
-				if !yield(TextDelta{Text: choice.Delta.Content}) {
+				if !yield(TextDelta{Text: first.Delta.Content}) {
 					return
 				}
 			}
 
-			for _, piece := range choice.Delta.ToolCalls {
+			for _, piece := range first.Delta.ToolCalls {
 				call := byIdx[piece.Index]
 
 				// Some LLM backends send every call at index 0, told apart
@@ -159,12 +162,12 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 				call.args.WriteString(piece.Function.Arguments)
 			}
 
-			if choice.FinishReason != "" {
-				resp.FinishReason = choice.FinishReason
+			if first.FinishReason != "" {
+				finishReason = first.FinishReason
 			}
 		}
 
-		if resp.FinishReason == "" {
+		if finishReason == "" {
 			yield(Failed{Err: ErrIncompleteStream})
 			return
 		}
@@ -174,13 +177,15 @@ func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 			wire[i] = replyToolCall{ID: c.id, Function: wireFunction{Name: c.name, Arguments: c.args.String()}}
 		}
 
-		resp.Message = Message{
-			Role:      RoleAssistant,
-			Content:   text.String(),
-			ToolCalls: toolCalls(wire),
-		}
-		resp.Reasoning = reasoning.String()
+		reply.Choices = []choice{{
+			FinishReason: finishReason,
+			Message: replyMessage{
+				Content:          text.String(),
+				ReasoningContent: reasoning.String(),
+				ToolCalls:        wire,
+			},
+		}}
 
-		yield(Done{Response: &resp})
+		yield(Done{Response: reply.toResponse()})
 	}
 }

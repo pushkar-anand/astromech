@@ -21,19 +21,5 @@ func (c *Client) Complete(ctx context.Context, req Request) (*Response, error) {
 		return nil, ErrNoReply
 	}
 
-	first := reply.Choices[0]
-
-	return &Response{
-		ID:    reply.ID,
-		Model: reply.Model,
-		Message: Message{
-			Role:      RoleAssistant,
-			Content:   first.Message.Content,
-			ToolCalls: toolCalls(first.Message.ToolCalls),
-		},
-		Reasoning:    first.Message.thinking(),
-		FinishReason: first.FinishReason,
-		Usage:        reply.Usage.toUsage(),
-		Stats:        reply.Stats,
-	}, nil
+	return reply.toResponse(), nil
 }
