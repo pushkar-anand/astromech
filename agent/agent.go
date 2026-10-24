@@ -47,6 +47,12 @@ type (
 
 func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 	return func(yield func(Event) bool) {
+		tools, toolsMap, err := a.tools()
+		if err != nil {
+			yield(Failed{Err: err})
+			return
+		}
+
 		history := slices.Clone(turn.History)
 		input := turn.Input
 
@@ -61,8 +67,6 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 				return
 			}
 		}
-
-		tools, toolsMap := a.tools()
 
 		limit := cmp.Or(a.MaxRounds, defaultMaxRounds)
 
@@ -168,21 +172,27 @@ func (a *Agent) systemPrompt() *llm.Message {
 	return nil
 }
 
-func (a *Agent) tools() ([]llm.Tool, map[string]Tool) {
+// tools is the definitions sent to the model, and the tools by name. Two
+// tools with one name are an error: the model could not tell them apart.
+func (a *Agent) tools() ([]llm.Tool, map[string]Tool, error) {
 	if len(a.Tools) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	tools := make([]llm.Tool, len(a.Tools))
-	toolsMap := make(map[string]Tool)
+	toolsMap := make(map[string]Tool, len(a.Tools))
 
 	for i, tool := range a.Tools {
 		def := tool.Def()
+		if _, ok := toolsMap[def.Name]; ok {
+			return nil, nil, fmt.Errorf("agent: two tools are named %q", def.Name)
+		}
+
 		tools[i] = def
 		toolsMap[def.Name] = tool
 	}
 
-	return tools, toolsMap
+	return tools, toolsMap, nil
 }
 
 func callTool(ctx context.Context, toolsMap map[string]Tool, toolCall llm.ToolCall) Result {
