@@ -185,12 +185,15 @@ func TestLLMLive(t *testing.T) {
 		// The base64 image would fill the debug dump.
 		client := quiet
 
+		image, err := NewMedia("image/png", redSquare(t))
+		require.NoError(t, err)
+
 		result, err := client.Complete(t.Context(), Request{
 			Model: liveModel,
 			Messages: []Message{{
 				Role:    RoleUser,
 				Content: "What colour is this image? Answer in one word.",
-				Media:   []Media{{MIMEType: "image/png", Data: redSquare(t)}},
+				Media:   []*Media{image},
 			}},
 		})
 
