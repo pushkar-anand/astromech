@@ -30,6 +30,12 @@ func TestLLMLive(t *testing.T) {
 		t.Skip("set LLM_BASE_URL, and LLM_API_KEY if the server needs one, to run live tests")
 	}
 
+	// quiet has no debug dump, for subtests whose output would drown in it.
+	t.Setenv("DEBUG_ASTROMECH", "false")
+
+	quiet, err := New(baseURL, secret.New(apiKey))
+	require.NoError(t, err)
+
 	t.Setenv("DEBUG_ASTROMECH", "true")
 
 	client, err := New(baseURL, secret.New(apiKey))
@@ -64,10 +70,7 @@ func TestLLMLive(t *testing.T) {
 	t.Run("test stream response", func(t *testing.T) {
 		// The debug dump would interleave with the streamed text, so this
 		// subtest uses a client without it.
-		t.Setenv("DEBUG_ASTROMECH", "false")
-
-		client, err := New(baseURL, secret.New(apiKey))
-		require.NoError(t, err)
+		client := quiet
 
 		stream := client.Stream(t.Context(), Request{
 			Model: liveModel,
@@ -154,10 +157,7 @@ func TestLLMLive(t *testing.T) {
 
 	t.Run("test embeddings", func(t *testing.T) {
 		// The debug dump would print every number of every vector.
-		t.Setenv("DEBUG_ASTROMECH", "false")
-
-		client, err := New(baseURL, secret.New(apiKey))
-		require.NoError(t, err)
+		client := quiet
 
 		// EmbeddingGemma expects a task prefix on queries and on the
 		// documents searched; see its model card.
@@ -183,10 +183,7 @@ func TestLLMLive(t *testing.T) {
 
 	t.Run("test image input", func(t *testing.T) {
 		// The base64 image would fill the debug dump.
-		t.Setenv("DEBUG_ASTROMECH", "false")
-
-		client, err := New(baseURL, secret.New(apiKey))
-		require.NoError(t, err)
+		client := quiet
 
 		result, err := client.Complete(t.Context(), Request{
 			Model: liveModel,

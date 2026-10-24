@@ -24,9 +24,11 @@ type backend struct {
 	t       *testing.T
 	replies map[string]reply
 
-	mu      sync.Mutex
-	headers []http.Header
-	bodies  []map[string]any
+	// header and body are of the latest request; header is nil until one
+	// arrives.
+	mu     sync.Mutex
+	header http.Header
+	body   map[string]any
 
 	// canceled is closed when a hanging reply sees the client go away.
 	canceled chan struct{}
@@ -73,8 +75,8 @@ func (b *backend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	b.mu.Lock()
-	b.headers = append(b.headers, r.Header.Clone())
-	b.bodies = append(b.bodies, body)
+	b.header = r.Header.Clone()
+	b.body = body
 	b.mu.Unlock()
 
 	rep, ok := b.replies[r.Method+" "+r.URL.Path]
@@ -108,18 +110,18 @@ func (b *backend) lastBody() map[string]any {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	require.NotEmpty(b.t, b.bodies, "the backend got no request")
+	require.NotNil(b.t, b.header, "the backend got no request")
 
-	return b.bodies[len(b.bodies)-1]
+	return b.body
 }
 
 func (b *backend) lastHeader() http.Header {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	require.NotEmpty(b.t, b.headers, "the backend got no request")
+	require.NotNil(b.t, b.header, "the backend got no request")
 
-	return b.headers[len(b.headers)-1]
+	return b.header
 }
 
 const errorBody = `{"error":{"message":"model not found","type":"invalid_request_error","code":"model_not_found"}}`
@@ -134,6 +136,14 @@ func requireBackendError(t *testing.T, err error, statusCode int) {
 	assert.Equal(t, statusCode, backendErr.StatusCode)
 	assert.Equal(t, "model not found", backendErr.Message)
 	assert.Equal(t, "invalid_request_error", backendErr.Type)
+
+	requireStatusError(t, err, statusCode)
+}
+
+// requireStatusError checks that err leads to an error response with the
+// given status.
+func requireStatusError(t *testing.T, err error, statusCode int) {
+	t.Helper()
 
 	var status *client.StatusError
 	require.ErrorAs(t, err, &status)
