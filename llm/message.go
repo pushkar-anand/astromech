@@ -39,7 +39,7 @@ type Media struct {
 	// Data is the content itself. When it is set, URL is ignored.
 	Data []byte
 
-	// URL points at the content instead. Not every LLM backend fetches
-	// URLs, and OpenAI accepts them only for images.
+	// URL points at an image instead; audio needs Data. Not every LLM
+	// backend fetches URLs.
 	URL string
 }

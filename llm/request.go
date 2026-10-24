@@ -2,8 +2,7 @@ package llm
 
 import (
 	"cmp"
-	"encoding/base64"
-	"strings"
+	"fmt"
 )
 
 // Request is one call to a model.
@@ -17,22 +16,6 @@ type Request struct {
 
 // Wire format of a request.
 type (
-	imageURL struct {
-		URL string `json:"url"`
-	}
-
-	inputAudio struct {
-		Data   string `json:"data"`   // base64, no "data:" prefix
-		Format string `json:"format"` // "wav", "mp3"
-	}
-
-	contentPart struct {
-		Type       string      `json:"type"`
-		Text       string      `json:"text,omitzero"`
-		ImageURL   *imageURL   `json:"image_url,omitzero"`
-		InputAudio *inputAudio `json:"input_audio,omitzero"`
-	}
-
 	chatRequest struct {
 		Model    string        `json:"model"`
 		Messages []wireMessage `json:"messages"`
@@ -41,7 +24,7 @@ type (
 
 	wireMessage struct {
 		Role       Role           `json:"role"`
-		Content    any            `json:"content,omitzero"`
+		Content    wireContent    `json:"content,omitzero"`
 		ToolCalls  []wireToolCall `json:"tool_calls,omitempty"`
 		ToolCallID string         `json:"tool_call_id,omitzero"`
 	}
@@ -70,7 +53,7 @@ type (
 )
 
 // toWire is r as the LLM backend expects it.
-func (r Request) toWire() chatRequest {
+func (r Request) toWire() (chatRequest, error) {
 	out := chatRequest{
 		Model:    r.Model,
 		Messages: make([]wireMessage, len(r.Messages)),
@@ -78,55 +61,16 @@ func (r Request) toWire() chatRequest {
 	}
 
 	for i, message := range r.Messages {
-		txt := message.Content
-
-		parts := make([]contentPart, 0)
-
-		if len(message.Media) > 0 {
-			parts = append(parts, contentPart{
-				Type: "text",
-				Text: txt,
-			})
-		}
-
-		for _, media := range message.Media {
-			var (
-				data string
-				cp   contentPart
-			)
-
-			if media.Data != nil {
-				data = base64.StdEncoding.EncodeToString(media.Data)
-			} else {
-				data = media.URL
-			}
-
-			if strings.HasPrefix(media.MIMEType, "image/") {
-				cp.Type = "image_url"
-				cp.ImageURL = &imageURL{
-					URL: data,
-				}
-			} else if strings.HasPrefix(media.MIMEType, "audio/") {
-				cp.Type = "input_audio"
-				cp.InputAudio = &inputAudio{
-					Data:   data,
-					Format: strings.TrimPrefix(media.MIMEType, "audio/"),
-				}
-			}
-
-			parts = append(parts, cp)
+		content, err := message.content()
+		if err != nil {
+			return chatRequest{}, fmt.Errorf("message %d: %w", i, err)
 		}
 
 		wm := wireMessage{
 			Role:       message.Role,
+			Content:    content,
 			ToolCallID: message.ToolCallID,
 			ToolCalls:  make([]wireToolCall, len(message.ToolCalls)),
-		}
-
-		if len(parts) == 0 {
-			wm.Content = txt
-		} else {
-			wm.Content = parts
 		}
 
 		for j, call := range message.ToolCalls {
@@ -140,7 +84,7 @@ func (r Request) toWire() chatRequest {
 		out.Tools[i] = tool.toWire()
 	}
 
-	return out
+	return out, nil
 }
 
 func (tc ToolCall) toWire() wireToolCall {

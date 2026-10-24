@@ -73,8 +73,14 @@ type pendingCall struct {
 // early cancels the request.
 func (c *Client) Stream(ctx context.Context, req Request) iter.Seq[Event] {
 	return func(yield func(Event) bool) {
+		body, err := req.toWire()
+		if err != nil {
+			yield(Failed{Err: fmt.Errorf("llm: stream: %w", err)})
+			return
+		}
+
 		sreq := streamRequest{
-			chatRequest:   req.toWire(),
+			chatRequest:   body,
 			Stream:        true,
 			StreamOptions: &streamOptions{IncludeUsage: true},
 		}

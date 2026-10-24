@@ -1,9 +1,17 @@
 package llm
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"math"
+	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/pushkar-anand/build-with-go/secret"
@@ -170,25 +178,30 @@ func TestLLMLive(t *testing.T) {
 		assert.Greater(t, cosine(query, weather), cosine(query, file))
 	})
 
-	t.Run("test content with media", func(t *testing.T) {
+	t.Run("test image input", func(t *testing.T) {
+		// The base64 image would fill the debug dump.
+		t.Setenv("DEBUG_ASTROMECH", "false")
+
+		client, err := New(baseURL, secret.New(apiKey))
+		require.NoError(t, err)
+
 		result, err := client.Complete(t.Context(), Request{
 			Model: "google/gemma-4-E4B-it-qat-q4_0-gguf",
-			Messages: []Message{
-				{
-					Role:    "user",
-					Content: "What do you see in the image?",
-					Media: []Media{
-						{
-							MIMEType: "image/png",
-							Data:     nil,
-							URL:      "https://upload.wikimedia.org/wikipedia/commons/6/6a/PNG_Test.png",
-						},
-					},
-				},
-			},
+			Messages: []Message{{
+				Role:    RoleUser,
+				Content: "What colour is this image? Answer in one word.",
+				Media:   []Media{{MIMEType: "image/png", Data: redSquare(t)}},
+			}},
 		})
-		assert.NoError(t, err)
-		assert.NotEmpty(t, result)
+
+		var backendErr *BackendError
+		if errors.As(err, &backendErr) && backendErr.StatusCode < http.StatusInternalServerError {
+			t.Skipf("the LLM backend refused the image; is llama.cpp running with --mmproj? %v", err)
+		}
+
+		require.NoError(t, err)
+		t.Logf("answer %q", result.Message.Content)
+		assert.Contains(t, strings.ToLower(result.Message.Content), "red")
 	})
 }
 
@@ -202,6 +215,19 @@ func cosine(a, b []float32) float64 {
 	}
 
 	return dot / (math.Sqrt(na) * math.Sqrt(nb))
+}
+
+// redSquare is a 64x64 PNG of solid red.
+func redSquare(t *testing.T) []byte {
+	t.Helper()
+
+	img := image.NewRGBA(image.Rect(0, 0, 64, 64))
+	draw.Draw(img, img.Bounds(), image.NewUniform(color.RGBA{R: 255, A: 255}), image.Point{}, draw.Src)
+
+	var buf bytes.Buffer
+	require.NoError(t, png.Encode(&buf, img))
+
+	return buf.Bytes()
 }
 
 // toolRoundTrip offers the model an add tool, answers the calls it makes,
