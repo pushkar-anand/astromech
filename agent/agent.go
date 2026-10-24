@@ -101,6 +101,12 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 				}
 			}
 
+			// llm.Client always ends in Done or Failed; other models may not.
+			if response == nil {
+				yield(Failed{Err: llm.ErrIncompleteStream, Messages: current, Usage: usage})
+				return
+			}
+
 			current = append(current, response.Message)
 
 			if len(response.Message.ToolCalls) == 0 {
