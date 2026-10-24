@@ -6,7 +6,9 @@ import (
 	"encoding/json/jsontext"
 	"fmt"
 	"iter"
+	"maps"
 	"slices"
+	"strings"
 
 	"github.com/pushkar-anand/astromech/llm"
 )
@@ -53,7 +55,6 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 			return
 		}
 
-		history := slices.Clone(turn.History)
 		input := turn.Input
 
 		var (
@@ -74,10 +75,11 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 			var send []llm.Message
 
 			if a.System != "" {
-				send = append(send, *a.systemPrompt())
+				send = append(send, llm.Message{Role: llm.RoleSystem, Content: a.System})
 			}
 
-			send = append(send, history...)
+			// Read only: the caller owns the history.
+			send = append(send, turn.History...)
 			send = append(send, current...)
 
 			request := llm.Request{
@@ -151,25 +153,12 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 			}
 		}
 
-		if !yield(Done{
+		yield(Done{
 			Stop:     StopMaxRounds,
 			Messages: current,
 			Usage:    usage,
-		}) {
-			return
-		}
+		})
 	}
-}
-
-func (a *Agent) systemPrompt() *llm.Message {
-	if a.System != "" {
-		return &llm.Message{
-			Role:    llm.RoleSystem,
-			Content: a.System,
-		}
-	}
-
-	return nil
 }
 
 // tools is the definitions sent to the model, and the tools by name. Two
@@ -195,11 +184,16 @@ func (a *Agent) tools() ([]llm.Tool, map[string]Tool, error) {
 	return tools, toolsMap, nil
 }
 
+// callTool runs the tool toolCall names. Whatever goes wrong becomes an
+// error result, naming the tool and showing what the model sent, so the
+// model can correct its next call.
 func callTool(ctx context.Context, toolsMap map[string]Tool, toolCall llm.ToolCall) Result {
 	t, ok := toolsMap[toolCall.Name]
 	if !ok {
+		names := cmp.Or(strings.Join(slices.Sorted(maps.Keys(toolsMap)), ", "), "none")
+
 		return Result{
-			Content: fmt.Sprintf("tool not found: %s", toolCall.Name),
+			Content: fmt.Sprintf("there is no tool named %q; the tools are: %s", toolCall.Name, names),
 			IsError: true,
 		}
 	}
@@ -207,7 +201,7 @@ func callTool(ctx context.Context, toolsMap map[string]Tool, toolCall llm.ToolCa
 	args := jsontext.Value(cmp.Or(toolCall.Arguments, "{}"))
 	if !args.IsValid() {
 		return Result{
-			Content: fmt.Sprintf("invalid tool arguments: %s", toolCall.Name),
+			Content: fmt.Sprintf("the arguments for %s are not valid JSON: %s", toolCall.Name, toolCall.Arguments),
 			IsError: true,
 		}
 	}
@@ -215,7 +209,7 @@ func callTool(ctx context.Context, toolsMap map[string]Tool, toolCall llm.ToolCa
 	result, err := t.Call(ctx, args)
 	if err != nil {
 		return Result{
-			Content: fmt.Sprintf("tool call failed: %s", err),
+			Content: fmt.Sprintf("%s failed: %v", toolCall.Name, err),
 			IsError: true,
 		}
 	}
