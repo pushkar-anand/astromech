@@ -15,6 +15,9 @@ type Request struct {
 }
 
 // Wire format of a request.
+//
+// Tools and ToolCalls take omitempty, not omitzero: toWire makes them empty
+// but not nil, and some LLM backends reject "tools": [] or "tool_calls": [].
 type (
 	chatRequest struct {
 		Model    string        `json:"model"`
