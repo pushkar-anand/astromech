@@ -98,7 +98,7 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 					yield(Failed{Err: e.Err, Messages: current, Usage: usage})
 					return
 				case llm.Done:
-					usage = e.Response.Usage
+					usage = usage.Add(e.Response.Usage)
 					response = e.Response
 				}
 			}
