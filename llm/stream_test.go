@@ -14,17 +14,21 @@ import (
 	"github.com/pushkar-anand/astromech/llm"
 )
 
-// sse joins chunks into a stream body, ending it the way the LLM backend
-// does.
-func sse(chunks ...string) string {
+// frames joins chunks into a stream body that just stops, as a dropped
+// connection does.
+func frames(chunks ...string) string {
 	var b strings.Builder
 	for _, c := range chunks {
 		b.WriteString("data: " + c + "\n\n")
 	}
 
-	b.WriteString("data: [DONE]\n\n")
-
 	return b.String()
+}
+
+// sse joins chunks into a stream body, ending it the way the LLM backend
+// does.
+func sse(chunks ...string) string {
+	return frames(append(chunks, "[DONE]")...)
 }
 
 var (
@@ -43,6 +47,34 @@ func collect(t *testing.T, c *llm.Client) []llm.Event {
 	t.Helper()
 
 	return slices.Collect(c.Stream(t.Context(), hello))
+}
+
+// streamDone collects a stream and returns its Done response, failing the
+// test if it ended any other way.
+func streamDone(t *testing.T, c *llm.Client) ([]llm.Event, *llm.Response) {
+	t.Helper()
+
+	events := collect(t, c)
+	require.NotEmpty(t, events)
+
+	done, ok := events[len(events)-1].(llm.Done)
+	require.True(t, ok, "last event is %#v, want llm.Done", events[len(events)-1])
+
+	return events[:len(events)-1], done.Response
+}
+
+// streamFailed collects a stream and returns its Failed error, failing the
+// test if it ended any other way.
+func streamFailed(t *testing.T, c *llm.Client) ([]llm.Event, error) {
+	t.Helper()
+
+	events := collect(t, c)
+	require.NotEmpty(t, events)
+
+	failed, ok := events[len(events)-1].(llm.Failed)
+	require.True(t, ok, "last event is %#v, want llm.Failed", events[len(events)-1])
+
+	return events[:len(events)-1], failed.Err
 }
 
 func TestStream(t *testing.T) {
@@ -83,16 +115,13 @@ func TestStreamWithoutStats(t *testing.T) {
 		"POST /v1/chat/completions": {body: sse(chunkText, chunkStop, chunkUsage)},
 	})
 
-	events := collect(t, c)
-	require.Len(t, events, 2)
+	deltas, resp := streamDone(t, c)
 
-	done, ok := events[1].(llm.Done)
-	require.True(t, ok, "last event is %T, want llm.Done", events[1])
-
-	assert.Equal(t, "Hi ", done.Response.Message.Content)
-	assert.Empty(t, done.Response.Reasoning)
-	assert.Equal(t, 13, done.Response.Usage.TotalTokens)
-	assert.Nil(t, done.Response.Stats)
+	assert.Len(t, deltas, 1)
+	assert.Equal(t, "Hi ", resp.Message.Content)
+	assert.Empty(t, resp.Reasoning)
+	assert.Equal(t, 13, resp.Usage.TotalTokens)
+	assert.Nil(t, resp.Stats)
 }
 
 func TestStreamWithoutUsage(t *testing.T) {
@@ -100,14 +129,11 @@ func TestStreamWithoutUsage(t *testing.T) {
 		"POST /v1/chat/completions": {body: sse(chunkText, chunkStop)},
 	})
 
-	events := collect(t, c)
-	require.Len(t, events, 2)
+	deltas, resp := streamDone(t, c)
 
-	done, ok := events[1].(llm.Done)
-	require.True(t, ok, "last event is %T, want llm.Done", events[1])
-
-	assert.Equal(t, "stop", done.Response.FinishReason)
-	assert.Zero(t, done.Response.Usage)
+	assert.Len(t, deltas, 1)
+	assert.Equal(t, "stop", resp.FinishReason)
+	assert.Zero(t, resp.Usage)
 }
 
 func TestStreamReasoningField(t *testing.T) {
@@ -119,34 +145,26 @@ func TestStreamReasoningField(t *testing.T) {
 		)},
 	})
 
-	events := collect(t, c)
-	require.Len(t, events, 4)
+	deltas, resp := streamDone(t, c)
 
 	assert.Equal(t, []llm.Event{
 		llm.ReasoningDelta{Text: "They said "},
 		llm.ReasoningDelta{Text: "hello."},
 		llm.TextDelta{Text: "Hi "},
-	}, events[:3])
-
-	done, ok := events[3].(llm.Done)
-	require.True(t, ok, "last event is %T, want llm.Done", events[3])
-	assert.Equal(t, "They said hello.", done.Response.Reasoning)
+	}, deltas)
+	assert.Equal(t, "They said hello.", resp.Reasoning)
 }
 
 func TestStreamIncomplete(t *testing.T) {
 	_, c := newBackend(t, map[string]reply{
 		// No finish_reason and no [DONE]: the connection dropped mid-reply.
-		"POST /v1/chat/completions": {body: "data: " + chunkText + "\n\n"},
+		"POST /v1/chat/completions": {body: frames(chunkText)},
 	})
 
-	events := collect(t, c)
-	require.Len(t, events, 2)
+	deltas, err := streamFailed(t, c)
 
-	assert.Equal(t, llm.TextDelta{Text: "Hi "}, events[0])
-
-	failed, ok := events[1].(llm.Failed)
-	require.True(t, ok, "last event is %T, want llm.Failed", events[1])
-	assert.ErrorIs(t, failed.Err, llm.ErrIncompleteStream)
+	assert.Equal(t, []llm.Event{llm.TextDelta{Text: "Hi "}}, deltas)
+	assert.ErrorIs(t, err, llm.ErrIncompleteStream)
 }
 
 func TestStreamErrorMidway(t *testing.T) {
@@ -158,18 +176,14 @@ func TestStreamErrorMidway(t *testing.T) {
 		)},
 	})
 
-	events := collect(t, c)
-	require.Len(t, events, 2)
+	deltas, err := streamFailed(t, c)
 
-	assert.Equal(t, llm.TextDelta{Text: "Hi "}, events[0])
-
-	failed, ok := events[1].(llm.Failed)
-	require.True(t, ok, "last event is %T, want llm.Failed", events[1])
+	assert.Equal(t, []llm.Event{llm.TextDelta{Text: "Hi "}}, deltas)
 
 	var backendErr *llm.BackendError
-	require.ErrorAs(t, failed.Err, &backendErr)
+	require.ErrorAs(t, err, &backendErr)
 	assert.Equal(t, &llm.BackendError{Message: "out of memory", Type: "server_error"}, backendErr)
-	assert.EqualError(t, failed.Err, "llm: stream: the LLM backend failed: out of memory")
+	assert.EqualError(t, err, "llm: stream: the LLM backend failed: out of memory")
 }
 
 func TestStreamError(t *testing.T) {
@@ -177,13 +191,11 @@ func TestStreamError(t *testing.T) {
 		"POST /v1/chat/completions": {status: http.StatusNotFound, body: errorBody},
 	})
 
-	events := collect(t, c)
-	require.Len(t, events, 1)
+	deltas, err := streamFailed(t, c)
 
-	failed, ok := events[0].(llm.Failed)
-	require.True(t, ok, "event is %T, want llm.Failed", events[0])
-	assert.EqualError(t, failed.Err, "llm: stream: the LLM backend answered 404 Not Found: model not found")
-	requireBackendError(t, failed.Err, http.StatusNotFound)
+	assert.Empty(t, deltas)
+	assert.EqualError(t, err, "llm: stream: the LLM backend answered 404 Not Found: model not found")
+	requireBackendError(t, err, http.StatusNotFound)
 }
 
 func TestStreamWaitsForSlowModel(t *testing.T) {
@@ -206,7 +218,7 @@ func TestStreamStopsEarly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b, c := newBackend(t, map[string]reply{
 			// The reply never finishes, so only stopping can end the request.
-			"POST /v1/chat/completions": {hang: true, body: "data: " + chunkThink + "\n\ndata: " + chunkText + "\n\n"},
+			"POST /v1/chat/completions": {hang: true, body: frames(chunkThink, chunkText)},
 		})
 
 		var events []llm.Event
@@ -236,20 +248,6 @@ func toolChunk(pieces ...string) string {
 }
 
 const chunkToolStop = `{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`
-
-// streamDone collects a stream and returns its Done response, failing the
-// test if it ended any other way.
-func streamDone(t *testing.T, c *llm.Client) ([]llm.Event, *llm.Response) {
-	t.Helper()
-
-	events := collect(t, c)
-	require.NotEmpty(t, events)
-
-	done, ok := events[len(events)-1].(llm.Done)
-	require.True(t, ok, "last event is %#v, want llm.Done", events[len(events)-1])
-
-	return events[:len(events)-1], done.Response
-}
 
 func TestStreamToolCallPieces(t *testing.T) {
 	_, c := newBackend(t, map[string]reply{
@@ -362,14 +360,13 @@ func TestStreamTextThenToolCall(t *testing.T) {
 func TestStreamToolCallCutOff(t *testing.T) {
 	_, c := newBackend(t, map[string]reply{
 		// The connection drops partway through the arguments.
-		"POST /v1/chat/completions": {body: "data: " +
-			toolChunk(`{"index":0,"id":"call_1","type":"function","function":{"name":"get_time","arguments":"{\"zone\""}}`) + "\n\n"},
+		"POST /v1/chat/completions": {body: frames(
+			toolChunk(`{"index":0,"id":"call_1","type":"function","function":{"name":"get_time","arguments":"{\"zone\""}}`),
+		)},
 	})
 
-	events := collect(t, c)
-	require.Len(t, events, 1)
+	deltas, err := streamFailed(t, c)
 
-	failed, ok := events[0].(llm.Failed)
-	require.True(t, ok, "event is %#v, want llm.Failed", events[0])
-	assert.ErrorIs(t, failed.Err, llm.ErrIncompleteStream)
+	assert.Empty(t, deltas)
+	assert.ErrorIs(t, err, llm.ErrIncompleteStream)
 }

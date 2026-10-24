@@ -81,12 +81,21 @@ func TestRequestToolDefaults(t *testing.T) {
 
 	body := b.lastBody()
 
-	call := body["messages"].([]any)[0].(map[string]any)["tool_calls"].([]any)[0].(map[string]any)
-	assert.Equal(t, "{}", call["function"].(map[string]any)["arguments"], "empty arguments")
+	assert.Equal(t, []any{
+		map[string]any{"role": "assistant", "tool_calls": []any{
+			map[string]any{"id": "call_1", "type": "function", "function": map[string]any{
+				"name": "now", "arguments": "{}",
+			}},
+		}},
+		map[string]any{"role": "tool", "tool_call_id": "call_1", "content": "12:00"},
+	}, body["messages"], "empty arguments")
 
-	tool := body["tools"].([]any)[0].(map[string]any)["function"].(map[string]any)
-	assert.Equal(t, map[string]any{"type": "object", "properties": map[string]any{}}, tool["parameters"], "nil parameters")
-	assert.NotContains(t, tool, "description")
+	assert.Equal(t, []any{
+		map[string]any{"type": "function", "function": map[string]any{
+			"name":       "now",
+			"parameters": map[string]any{"type": "object", "properties": map[string]any{}},
+		}},
+	}, body["tools"], "nil parameters, no description")
 }
 
 func TestStreamSendsTools(t *testing.T) {
@@ -94,17 +103,20 @@ func TestStreamSendsTools(t *testing.T) {
 		"POST /v1/chat/completions": {body: sse(chunkText, chunkStop)},
 	})
 
-	for range c.Stream(t.Context(), llm.Request{
-		Model:    "model-a",
-		Messages: []llm.Message{{Role: llm.RoleUser, Content: "Hello"}},
-		Tools:    []llm.Tool{{Name: "now"}},
-	}) {
+	req := hello
+	req.Tools = []llm.Tool{{Name: "now"}}
+
+	for range c.Stream(t.Context(), req) {
 	}
 
 	body := b.lastBody()
 	assert.Equal(t, true, body["stream"])
-	require.Len(t, body["tools"], 1)
-	assert.Equal(t, "now", body["tools"].([]any)[0].(map[string]any)["function"].(map[string]any)["name"])
+	assert.Equal(t, []any{
+		map[string]any{"type": "function", "function": map[string]any{
+			"name":       "now",
+			"parameters": map[string]any{"type": "object", "properties": map[string]any{}},
+		}},
+	}, body["tools"])
 }
 
 func TestCompleteReadsToolCalls(t *testing.T) {

@@ -103,6 +103,26 @@ func (u usage) toUsage() Usage {
 	}
 }
 
+// toResponse is the reply as the harness sees it, from its first choice.
+// c must have one.
+func (c completion) toResponse() *Response {
+	first := c.Choices[0]
+
+	return &Response{
+		ID:    c.ID,
+		Model: c.Model,
+		Message: Message{
+			Role:      RoleAssistant,
+			Content:   first.Message.Content,
+			ToolCalls: toolCalls(first.Message.ToolCalls),
+		},
+		Reasoning:    first.Message.thinking(),
+		FinishReason: first.FinishReason,
+		Usage:        c.Usage.toUsage(),
+		Stats:        c.Stats,
+	}
+}
+
 // toToolCall is the call as the harness sees it. i is its place in the
 // reply, used for an ID when the LLM backend sends none.
 func (tc replyToolCall) toToolCall(i int) ToolCall {

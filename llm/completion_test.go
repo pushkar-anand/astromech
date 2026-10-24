@@ -6,7 +6,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/pushkar-anand/build-with-go/http/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -129,7 +128,5 @@ func TestCompleteErrorWithoutMessage(t *testing.T) {
 	var backendErr *llm.BackendError
 	assert.NotErrorAs(t, err, &backendErr)
 
-	var status *client.StatusError
-	require.ErrorAs(t, err, &status)
-	assert.Equal(t, http.StatusBadGateway, status.StatusCode)
+	requireStatusError(t, err, http.StatusBadGateway)
 }

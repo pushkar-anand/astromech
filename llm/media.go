@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/base64"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -31,12 +32,29 @@ type (
 	}
 )
 
-func (c wireContent) MarshalJSON() ([]byte, error) {
+// MarshalJSONTo writes straight into the request, so media is not encoded
+// into a buffer of its own first.
+func (c wireContent) MarshalJSONTo(enc *jsontext.Encoder) error {
 	if len(c) == 1 && c[0].Type == "text" {
-		return json.Marshal(c[0].Text)
+		return json.MarshalEncode(enc, c[0].Text)
 	}
 
-	return json.Marshal([]contentPart(c))
+	return json.MarshalEncode(enc, []contentPart(c))
+}
+
+// base64String is prefix then data in base64, built in one allocation since
+// media can run to megabytes.
+func base64String(prefix string, data []byte) string {
+	var b strings.Builder
+	b.Grow(len(prefix) + base64.StdEncoding.EncodedLen(len(data)))
+	b.WriteString(prefix)
+
+	// Writes to a strings.Builder cannot fail.
+	enc := base64.NewEncoder(base64.StdEncoding, &b)
+	_, _ = enc.Write(data)
+	_ = enc.Close()
+
+	return b.String()
 }
 
 // audioFormats maps an audio MIME subtype to the format the LLM backend
@@ -77,7 +95,7 @@ func (m Media) toWire() (contentPart, error) {
 	case "image":
 		url := m.URL
 		if len(m.Data) > 0 {
-			url = "data:" + m.MIMEType + ";base64," + base64.StdEncoding.EncodeToString(m.Data)
+			url = base64String("data:"+m.MIMEType+";base64,", m.Data)
 		}
 
 		if url == "" {
@@ -97,7 +115,7 @@ func (m Media) toWire() (contentPart, error) {
 		}
 
 		return contentPart{Type: "input_audio", InputAudio: &inputAudio{
-			Data:   base64.StdEncoding.EncodeToString(m.Data),
+			Data:   base64String("", m.Data),
 			Format: format,
 		}}, nil
 	}
