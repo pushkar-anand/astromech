@@ -149,19 +149,6 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 	}
 }
 
-func (a *Agent) shouldExitLoop(turn Turn, iteration int) bool {
-	maxRounds := a.MaxRounds
-
-	if maxRounds == 0 {
-		maxRounds = defaultMaxRounds
-	} else if maxRounds > 0 {
-		return iteration >= maxRounds
-	}
-
-	// TODO: define a better exit as max rounds is unlimited
-	return false
-}
-
 func (a *Agent) systemPrompt() *llm.Message {
 	if a.System != "" {
 		return &llm.Message{
