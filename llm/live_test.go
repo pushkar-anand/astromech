@@ -19,6 +19,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// liveModel is the chat model the live tests ask for.
+const liveModel = "google/gemma-4-E4B-it-qat-q4_0-gguf"
+
 func TestLLMLive(t *testing.T) {
 	baseURL := os.Getenv("LLM_BASE_URL")
 	apiKey := os.Getenv("LLM_API_KEY")
@@ -40,7 +43,7 @@ func TestLLMLive(t *testing.T) {
 
 	t.Run("test completions endpoint", func(t *testing.T) {
 		result, err := client.Complete(t.Context(), Request{
-			Model: "google/gemma-4-E4B-it-qat-q4_0-gguf",
+			Model: liveModel,
 			Messages: []Message{
 				{
 					Role:    RoleSystem,
@@ -67,7 +70,7 @@ func TestLLMLive(t *testing.T) {
 		require.NoError(t, err)
 
 		stream := client.Stream(t.Context(), Request{
-			Model: "google/gemma-4-E4B-it-qat-q4_0-gguf",
+			Model: liveModel,
 			Messages: []Message{
 				{
 					Role:    RoleSystem,
@@ -186,7 +189,7 @@ func TestLLMLive(t *testing.T) {
 		require.NoError(t, err)
 
 		result, err := client.Complete(t.Context(), Request{
-			Model: "google/gemma-4-E4B-it-qat-q4_0-gguf",
+			Model: liveModel,
 			Messages: []Message{{
 				Role:    RoleUser,
 				Content: "What colour is this image? Answer in one word.",
@@ -234,8 +237,6 @@ func redSquare(t *testing.T) []byte {
 func toolRoundTrip(t *testing.T, send func(Request) *Response) {
 	t.Helper()
 
-	const model = "google/gemma-4-E4B-it-qat-q4_0-gguf"
-
 	add := Tool{
 		Name:        "add",
 		Description: "Adds two integers.",
@@ -251,7 +252,7 @@ func toolRoundTrip(t *testing.T, send func(Request) *Response) {
 
 	history := []Message{{Role: RoleUser, Content: "Use the add tool: what is 2 + 2?"}}
 
-	first := send(Request{Model: model, Messages: history, Tools: []Tool{add}})
+	first := send(Request{Model: liveModel, Messages: history, Tools: []Tool{add}})
 	t.Logf("finish %q, content %q, calls %+v", first.FinishReason, first.Message.Content, first.Message.ToolCalls)
 
 	// The finish reason is not reliable: some LLM backends say "stop" even
@@ -265,7 +266,7 @@ func toolRoundTrip(t *testing.T, send func(Request) *Response) {
 		history = append(history, Message{Role: RoleTool, ToolCallID: call.ID, Content: "4"})
 	}
 
-	second := send(Request{Model: model, Messages: history, Tools: []Tool{add}})
+	second := send(Request{Model: liveModel, Messages: history, Tools: []Tool{add}})
 	t.Logf("finish %q, answer %q", second.FinishReason, second.Message.Content)
 	assert.NotEmpty(t, second.Message.Content)
 }
