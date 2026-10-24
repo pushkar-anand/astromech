@@ -31,3 +31,5 @@ go.work.sum
 # Agent scratch
 .claude/
 .junie/
+
+plans/
