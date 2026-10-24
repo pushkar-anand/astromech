@@ -65,15 +65,18 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 		tools, toolsMap := a.tools()
 
 		for i := 0; !a.shouldExitLoop(turn, i); i++ {
+			var send []llm.Message
+
 			if a.System != "" {
-				current = append(current, *a.systemPrompt())
+				send = append(send, *a.systemPrompt())
 			}
 
-			current = append(current, history...)
+			send = append(send, history...)
+			send = append(send, current...)
 
 			request := llm.Request{
 				Model:    a.ModelID,
-				Messages: current,
+				Messages: send,
 				Tools:    tools,
 			}
 
@@ -100,7 +103,6 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 			}
 
 			current = append(current, response.Message)
-			history = append(history, response.Message)
 
 			if len(response.Message.ToolCalls) == 0 {
 				yield(Done{
