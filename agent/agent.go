@@ -64,7 +64,9 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 
 		tools, toolsMap := a.tools()
 
-		for i := 0; !a.shouldExitLoop(turn, i); i++ {
+		limit := cmp.Or(a.MaxRounds, defaultMaxRounds)
+
+		for i := 0; limit < 0 || i < limit; i++ {
 			var send []llm.Message
 
 			if a.System != "" {
