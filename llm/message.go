@@ -24,4 +24,22 @@ type Message struct {
 
 	// ToolCallID is set on a RoleTool message: the call it answers.
 	ToolCallID string
+
+	// Media is sent after Content. Only RoleUser messages may carry it.
+	Media []Media
+}
+
+// Media is an image or audio clip sent with a [Message]. The model must
+// accept that kind of input; on llama.cpp that means a server started with
+// --mmproj.
+type Media struct {
+	// MIMEType is such as "image/png" or "audio/wav".
+	MIMEType string
+
+	// Data is the content itself. When it is set, URL is ignored.
+	Data []byte
+
+	// URL points at the content instead. Not every LLM backend fetches
+	// URLs, and OpenAI accepts them only for images.
+	URL string
 }

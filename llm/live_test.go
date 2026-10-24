@@ -169,6 +169,27 @@ func TestLLMLive(t *testing.T) {
 
 		assert.Greater(t, cosine(query, weather), cosine(query, file))
 	})
+
+	t.Run("test content with media", func(t *testing.T) {
+		result, err := client.Complete(t.Context(), Request{
+			Model: "google/gemma-4-E4B-it-qat-q4_0-gguf",
+			Messages: []Message{
+				{
+					Role:    "user",
+					Content: "What do you see in the image?",
+					Media: []Media{
+						{
+							MIMEType: "image/png",
+							Data:     nil,
+							URL:      "https://upload.wikimedia.org/wikipedia/commons/6/6a/PNG_Test.png",
+						},
+					},
+				},
+			},
+		})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, result)
+	})
 }
 
 // cosine is the cosine similarity of two vectors of the same length.
