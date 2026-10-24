@@ -63,6 +63,27 @@ func (ReasoningDelta) event() {}
 func (Done) event()           {}
 func (Failed) event()         {}
 
+// Collect reads stream until it is done and returns the reply. onEvent, when
+// not nil, sees each event first, such as to show text as it arrives. To
+// stop early, cancel the stream's context.
+func Collect(stream iter.Seq[Event], onEvent func(Event)) (*Response, error) {
+	for ev := range stream {
+		if onEvent != nil {
+			onEvent(ev)
+		}
+
+		switch e := ev.(type) {
+		case Done:
+			return e.Response, nil
+		case Failed:
+			return nil, e.Err
+		}
+	}
+
+	// Client.Stream always ends in Done or Failed; other streams may not.
+	return nil, ErrIncompleteStream
+}
+
 // pendingCall is a tool call being put back together from stream pieces.
 type pendingCall struct {
 	id, name string
