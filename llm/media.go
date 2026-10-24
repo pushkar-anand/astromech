@@ -1,11 +1,14 @@
 package llm
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"mime"
+	"net/http"
 	"strings"
 )
 
@@ -78,10 +81,20 @@ type Media struct {
 }
 
 // NewMedia is data of the given MIME type, such as "image/png" or
-// "audio/wav".
+// "audio/wav". An empty type is detected from the data, which works for
+// common formats such as PNG, JPEG, WebP, WAV and MP3.
 func NewMedia(mimeType string, data []byte) (*Media, error) {
 	if len(data) == 0 {
 		return nil, errors.New("llm: media: no data")
+	}
+
+	detected := mimeType == ""
+	mimeType = cmp.Or(mimeType, http.DetectContentType(data))
+
+	// Lowercases, and drops parameters such as "; charset=binary".
+	mimeType, _, err := mime.ParseMediaType(mimeType)
+	if err != nil {
+		return nil, fmt.Errorf("llm: media: %w", err)
 	}
 
 	kind, subtype, _ := strings.Cut(mimeType, "/")
@@ -102,28 +115,25 @@ func NewMedia(mimeType string, data []byte) (*Media, error) {
 		}
 	}
 
+	if detected {
+		return nil, fmt.Errorf("llm: media: detected type %q is not supported; pass the MIME type if it is wrong", mimeType)
+	}
+
 	return nil, fmt.Errorf("llm: media: type %q is not supported", mimeType)
 }
 
-// NewMediaURL is an image of the given MIME type that the LLM backend
-// fetches from url. Not every LLM backend fetches URLs, and none take audio
-// this way.
-func NewMediaURL(mimeType, url string) (*Media, error) {
+// NewMediaURL is an image that the LLM backend fetches from url. Not every
+// LLM backend fetches URLs, and none take audio this way.
+func NewMediaURL(url string) (*Media, error) {
 	if url == "" {
 		return nil, errors.New("llm: media: no URL")
 	}
 
-	switch kind, _, _ := strings.Cut(mimeType, "/"); kind {
-	case "image":
-		return &Media{mimeType: mimeType, part: contentPart{Type: "image_url", ImageURL: &imageURL{URL: url}}}, nil
-	case "audio":
-		return nil, errors.New("llm: media: audio needs data; LLM backends do not take audio URLs")
-	}
-
-	return nil, fmt.Errorf("llm: media: type %q is not supported", mimeType)
+	return &Media{part: contentPart{Type: "image_url", ImageURL: &imageURL{URL: url}}}, nil
 }
 
-// MIMEType is the type m was made with.
+// MIMEType is the type of m's data: as given, or detected, and lowercased
+// without parameters. It is empty for a [NewMediaURL] image.
 func (m *Media) MIMEType() string { return m.mimeType }
 
 // content is m's text and media as the LLM backend expects them; nil when

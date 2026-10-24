@@ -20,7 +20,7 @@ func media(t *testing.T, mimeType, data string) *llm.Media {
 }
 
 func TestRequestSendsMedia(t *testing.T) {
-	imageURL, err := llm.NewMediaURL("image/png", "https://example.com/a.png")
+	imageURL, err := llm.NewMediaURL("https://example.com/a.png")
 	require.NoError(t, err)
 
 	for name, tc := range map[string]struct {
@@ -103,8 +103,67 @@ func TestRequestSharesMedia(t *testing.T) {
 	}, b.lastBody()["messages"])
 }
 
-func TestMediaMIMEType(t *testing.T) {
-	assert.Equal(t, "audio/x-wav", media(t, "audio/x-wav", "wav").MIMEType())
+// Headers just long enough for http.DetectContentType.
+const (
+	pngHeader = "\x89PNG\r\n\x1a\n"
+	wavHeader = "RIFF\x00\x00\x00\x00WAVE"
+	mp3Header = "ID3"
+)
+
+func TestNewMediaType(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mimeType, data string
+		want           string
+		wantPart       map[string]any
+	}{
+		"as given": {
+			mimeType: "audio/x-wav", data: "wav", want: "audio/x-wav",
+			wantPart: map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": "d2F2", "format": "wav"}},
+		},
+		"normalized": {
+			mimeType: "Image/PNG; charset=binary", data: "png", want: "image/png",
+			wantPart: map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,cG5n"}},
+		},
+		"given type wins": {
+			mimeType: "image/webp", data: pngHeader, want: "image/webp",
+			wantPart: map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/webp;base64,iVBORw0KGgo="}},
+		},
+		"detected PNG": {
+			data: pngHeader, want: "image/png",
+			wantPart: map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,iVBORw0KGgo="}},
+		},
+		"detected WAV": {
+			data: wavHeader, want: "audio/wave",
+			wantPart: map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": "UklGRgAAAABXQVZF", "format": "wav"}},
+		},
+		"detected MP3": {
+			data: mp3Header, want: "audio/mpeg",
+			wantPart: map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": "SUQz", "format": "mp3"}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := media(t, tc.mimeType, tc.data)
+			assert.Equal(t, tc.want, m.MIMEType())
+
+			b, c := newBackend(t, map[string]reply{
+				"POST /v1/chat/completions": {body: okReply},
+			})
+
+			_, err := c.Complete(t.Context(), llm.Request{Model: "model-a", Messages: []llm.Message{
+				{Role: llm.RoleUser, Media: []*llm.Media{m}},
+			}})
+			require.NoError(t, err)
+
+			assert.Equal(t, []any{map[string]any{"role": "user", "content": []any{tc.wantPart}}}, b.lastBody()["messages"])
+		})
+	}
+}
+
+func TestNewMediaURLType(t *testing.T) {
+	m, err := llm.NewMediaURL("https://example.com/a.png")
+	require.NoError(t, err)
+
+	assert.Empty(t, m.MIMEType())
 }
 
 func TestNewMediaRejects(t *testing.T) {
@@ -116,10 +175,6 @@ func TestNewMediaRejects(t *testing.T) {
 			new:  func() (*llm.Media, error) { return llm.NewMedia("application/pdf", []byte("pdf")) },
 			want: `llm: media: type "application/pdf" is not supported`,
 		},
-		"no type": {
-			new:  func() (*llm.Media, error) { return llm.NewMedia("", []byte("png")) },
-			want: `llm: media: type "" is not supported`,
-		},
 		"unknown audio": {
 			new:  func() (*llm.Media, error) { return llm.NewMedia("audio/flac", []byte("flac")) },
 			want: `llm: media: type "audio/flac" is not supported`,
@@ -129,16 +184,16 @@ func TestNewMediaRejects(t *testing.T) {
 			want: "llm: media: no data",
 		},
 		"no URL": {
-			new:  func() (*llm.Media, error) { return llm.NewMediaURL("image/png", "") },
+			new:  func() (*llm.Media, error) { return llm.NewMediaURL("") },
 			want: "llm: media: no URL",
 		},
-		"audio from URL": {
-			new:  func() (*llm.Media, error) { return llm.NewMediaURL("audio/wav", "https://example.com/a.wav") },
-			want: "llm: media: audio needs data; LLM backends do not take audio URLs",
+		"bad type": {
+			new:  func() (*llm.Media, error) { return llm.NewMedia("image/", []byte("png")) },
+			want: "llm: media: mime: expected token after slash",
 		},
-		"unknown type from URL": {
-			new:  func() (*llm.Media, error) { return llm.NewMediaURL("text/csv", "https://example.com/a.csv") },
-			want: `llm: media: type "text/csv" is not supported`,
+		"undetectable": {
+			new:  func() (*llm.Media, error) { return llm.NewMedia("", []byte("name,age\nAda,36\n")) },
+			want: `llm: media: detected type "text/plain" is not supported; pass the MIME type if it is wrong`,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
