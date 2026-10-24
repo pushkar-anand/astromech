@@ -110,6 +110,9 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 			}
 
 			current = append(current, response.Message)
+			if !yield(MessageAdded{Message: response.Message}) {
+				return
+			}
 
 			if len(response.Message.ToolCalls) == 0 {
 				yield(Done{
@@ -131,11 +134,16 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 					return
 				}
 
-				current = append(current, llm.Message{
+				msg := llm.Message{
 					Role:       llm.RoleTool,
 					Content:    result.Content,
 					ToolCallID: toolCall.ID,
-				})
+				}
+
+				current = append(current, msg)
+				if !yield(MessageAdded{Message: msg}) {
+					return
+				}
 			}
 		}
 
