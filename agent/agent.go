@@ -55,109 +55,20 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 			return
 		}
 
-		input := turn.Input
-
-		var (
-			current []llm.Message
-			usage   llm.Usage
-		)
-
-		if input != nil {
-			current = append(current, *input)
-			if !yield(MessageAdded{Message: *input}) {
-				return
-			}
+		r := run{
+			ctx:        ctx,
+			agent:      a,
+			yield:      yield,
+			tools:      tools,
+			toolsMap:   toolsMap,
+			input:      turn.Input,
+			history:    slices.Clone(turn.History),
+			current:    make([]llm.Message, 0),
+			usage:      llm.Usage{},
+			roundLimit: cmp.Or(a.MaxRounds, defaultMaxRounds),
 		}
 
-		limit := cmp.Or(a.MaxRounds, defaultMaxRounds)
-
-		for i := 0; limit < 0 || i < limit; i++ {
-			var send []llm.Message
-
-			if a.System != "" {
-				send = append(send, llm.Message{Role: llm.RoleSystem, Content: a.System})
-			}
-
-			// Read only: the caller owns the history.
-			send = append(send, turn.History...)
-			send = append(send, current...)
-
-			request := llm.Request{
-				Model:    a.ModelID,
-				Messages: send,
-				Tools:    tools,
-			}
-
-			var response *llm.Response
-
-			for event := range a.Model.Stream(ctx, request) {
-				switch e := event.(type) {
-				case llm.TextDelta:
-					if !yield(TextDelta{Text: e.Text}) {
-						return
-					}
-				case llm.ReasoningDelta:
-					if !yield(ReasoningDelta{Text: e.Text}) {
-						return
-					}
-				case llm.Failed:
-					yield(Failed{Err: e.Err, Messages: current, Usage: usage})
-					return
-				case llm.Done:
-					usage = usage.Add(e.Response.Usage)
-					response = e.Response
-				}
-			}
-
-			// llm.Client always ends in Done or Failed; other models may not.
-			if response == nil {
-				yield(Failed{Err: llm.ErrIncompleteStream, Messages: current, Usage: usage})
-				return
-			}
-
-			current = append(current, response.Message)
-			if !yield(MessageAdded{Message: response.Message}) {
-				return
-			}
-
-			if len(response.Message.ToolCalls) == 0 {
-				yield(Done{
-					Stop:     StopAnswered,
-					Messages: current,
-					Usage:    usage,
-				})
-				return
-			}
-
-			for _, toolCall := range response.Message.ToolCalls {
-				if !yield(ToolStarted{Call: toolCall}) {
-					return
-				}
-
-				result := callTool(ctx, toolsMap, toolCall)
-
-				if !yield(ToolFinished{Call: toolCall, Result: result}) {
-					return
-				}
-
-				msg := llm.Message{
-					Role:       llm.RoleTool,
-					Content:    result.Content,
-					ToolCallID: toolCall.ID,
-				}
-
-				current = append(current, msg)
-				if !yield(MessageAdded{Message: msg}) {
-					return
-				}
-			}
-		}
-
-		yield(Done{
-			Stop:     StopMaxRounds,
-			Messages: current,
-			Usage:    usage,
-		})
+		r.loop()
 	}
 }
 
