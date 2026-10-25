@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/pushkar-anand/astromech/llm"
 )
@@ -139,9 +140,15 @@ func (r *run) fail(err error) {
 }
 
 // callAllTools runs a round's tool calls in order, adding each result to
-// the turn. It is false when the caller stopped.
+// the turn. It is false when the turn is over: the caller stopped, or ctx
+// was done before a call, which callAllTools has already reported.
 func (r *run) callAllTools(toolCalls []llm.ToolCall) bool {
-	for _, toolCall := range toolCalls {
+	for i, toolCall := range toolCalls {
+		if err := r.ctx.Err(); err != nil {
+			r.skip(toolCalls[i:], err)
+			return false
+		}
+
 		if !r.yield(ToolStarted{Call: toolCall}) {
 			return false
 		}
@@ -164,4 +171,23 @@ func (r *run) callAllTools(toolCalls []llm.ToolCall) bool {
 	}
 
 	return true
+}
+
+// skip ends the turn with err, first giving each call that will not run a
+// result: every call needs one, or the turn's messages are not a history
+// the caller can store and resume.
+func (r *run) skip(toolCalls []llm.ToolCall, err error) {
+	for _, toolCall := range toolCalls {
+		msg := llm.Message{
+			Role:       llm.RoleTool,
+			Content:    fmt.Sprintf("%s was not run: %v", toolCall.Name, err),
+			ToolCallID: toolCall.ID,
+		}
+
+		if !r.add(&msg) {
+			return
+		}
+	}
+
+	r.fail(err)
 }

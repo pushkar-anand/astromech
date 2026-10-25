@@ -252,6 +252,37 @@ func TestRunFailsWhenContextIsDone(t *testing.T) {
 	assert.Equal(t, []llm.Message{input}, failed.Messages)
 }
 
+func TestRunSkipsToolsWhenContextIsDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	// The first call cancels the turn, so the second never runs.
+	calls := []llm.ToolCall{
+		{ID: "call_1", Name: "cancel", Arguments: `{}`},
+		{ID: "call_2", Name: "cancel", Arguments: `{}`},
+	}
+	model := llmtest.New(t, llmtest.ToolCalls(calls...))
+	tool := &cancelTool{cancel: cancel}
+	a := &agent.Agent{Model: model, ModelID: "model-a", Tools: []agent.Tool{tool}}
+
+	events := slices.Collect(a.Run(ctx, agent.Turn{Input: &input}))
+
+	assert.Equal(t, 1, tool.calls)
+	assert.NotContains(t, events, agent.ToolStarted{Call: calls[1]})
+
+	// Every call has a result, so the history is still valid to store.
+	failed := last[agent.Failed](t, events)
+	require.ErrorIs(t, failed.Err, context.Canceled)
+	assert.Equal(t, []llm.Message{
+		input,
+		callsReply(calls...),
+		toolMessage("call_1", "cancelled"),
+		toolMessage("call_2", "cancel was not run: context canceled"),
+	}, failed.Messages)
+	assert.Equal(t, added(events), failed.Messages)
+	assert.Len(t, model.Requests(), 1)
+}
+
 func TestRunStopsWhenCallerStops(t *testing.T) {
 	// A turn with one tool call, stopped at each of its events in turn: no
 	// panic from yielding again, no request or tool call after the stop.
@@ -387,4 +418,20 @@ func (*countingTool) ReadOnly() bool { return true }
 func (c *countingTool) Call(context.Context, jsontext.Value) (agent.Result, error) {
 	c.calls++
 	return agent.Result{Content: "4"}, nil
+}
+
+// cancelTool cancels the turn it runs in.
+type cancelTool struct {
+	cancel context.CancelFunc
+	calls  int
+}
+
+func (*cancelTool) Def() llm.Tool  { return llm.Tool{Name: "cancel", Description: "Cancels the turn."} }
+func (*cancelTool) ReadOnly() bool { return true }
+
+func (c *cancelTool) Call(context.Context, jsontext.Value) (agent.Result, error) {
+	c.calls++
+	c.cancel()
+
+	return agent.Result{Content: "cancelled"}, nil
 }
