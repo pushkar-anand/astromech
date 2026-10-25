@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/pushkar-anand/astromech/llm"
 )
@@ -92,14 +94,19 @@ func (r *run) request() llm.Request {
 }
 
 // round streams one reply to the caller, adds its usage, and returns it.
-// It is false when the turn is over: the caller stopped, or the model
-// failed, which round has already reported.
+// It is false when the turn is over: the caller stopped, or the stream
+// broke, which round has already reported.
 func (r *run) round(request llm.Request) (*llm.Response, bool) {
-	var response *llm.Response
+	var (
+		response *llm.Response
+		text     strings.Builder // what the caller has seen of the reply
+	)
 
 	for event := range r.agent.Model.Stream(r.ctx, request) {
 		switch e := event.(type) {
 		case llm.TextDelta:
+			text.WriteString(e.Text)
+
 			if !r.yield(TextDelta{Text: e.Text}) {
 				return nil, false
 			}
@@ -108,7 +115,7 @@ func (r *run) round(request llm.Request) (*llm.Response, bool) {
 				return nil, false
 			}
 		case llm.Failed:
-			r.fail(e.Err)
+			r.broken(text.String(), e.Err)
 			return nil, false
 		case llm.Done:
 			r.usage = r.usage.Add(e.Response.Usage)
@@ -118,11 +125,23 @@ func (r *run) round(request llm.Request) (*llm.Response, bool) {
 
 	// llm.Client always ends in Done or Failed; other models may not.
 	if response == nil {
-		r.fail(llm.ErrIncompleteStream)
+		r.broken(text.String(), llm.ErrIncompleteStream)
 		return nil, false
 	}
 
 	return response, true
+}
+
+// broken ends the turn after a stream broke. The text the caller has seen
+// is added, so the next turn knows it was said; tool calls are dropped, as
+// they may be half sent. When ctx is done, its cause is the error: the
+// model's says only that the request was cancelled, not why.
+func (r *run) broken(text string, err error) {
+	if text != "" && !r.add(&llm.Message{Role: llm.RoleAssistant, Content: text}) {
+		return
+	}
+
+	r.fail(cmp.Or(context.Cause(r.ctx), err))
 }
 
 // add appends msg to the turn and reports it. A nil msg adds nothing. It
@@ -156,8 +175,8 @@ func (r *run) fail(err error) {
 // was done before a call, which callAllTools has already reported.
 func (r *run) callAllTools(toolCalls []llm.ToolCall) bool {
 	for i, toolCall := range toolCalls {
-		if err := r.ctx.Err(); err != nil {
-			r.skip(toolCalls[i:], err)
+		if r.ctx.Err() != nil {
+			r.skip(toolCalls[i:], context.Cause(r.ctx))
 			return false
 		}
 

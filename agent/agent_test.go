@@ -306,9 +306,19 @@ func TestRunFails(t *testing.T) {
 	for name, tc := range map[string]struct {
 		second  llmtest.Turn
 		wantErr error
+		kept    []llm.Message // of the second round
 	}{
-		"model fails":       {second: llmtest.Fail(boom), wantErr: boom},
-		"stream ends early": {second: llmtest.Events(llm.TextDelta{Text: "4"}), wantErr: llm.ErrIncompleteStream},
+		"model fails": {second: llmtest.Fail(boom), wantErr: boom},
+		"model fails mid-answer": {
+			second:  llmtest.Events(llm.TextDelta{Text: "4"}, llm.Failed{Err: boom}),
+			wantErr: boom,
+			kept:    []llm.Message{reply("4")},
+		},
+		"stream ends early": {
+			second:  llmtest.Events(llm.TextDelta{Text: "4"}),
+			wantErr: llm.ErrIncompleteStream,
+			kept:    []llm.Message{reply("4")},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			// The first round succeeds, so there is something to report.
@@ -319,30 +329,69 @@ func TestRunFails(t *testing.T) {
 
 			failed := last[agent.Failed](t, events)
 			require.ErrorIs(t, failed.Err, tc.wantErr)
-			assert.Equal(t, []llm.Message{input, callsReply(addCall("call_1")), toolMessage("call_1", "4")}, failed.Messages)
+			first := []llm.Message{input, callsReply(addCall("call_1")), toolMessage("call_1", "4")}
+			assert.Equal(t, slices.Concat(first, tc.kept), failed.Messages, "what the caller saw is kept")
 			assert.Equal(t, added(events), failed.Messages)
 			assert.Equal(t, usage, failed.Usage)
 		})
 	}
 }
 
-func TestRunFailsWhenContextIsDone(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
+var errInterrupted = errors.New("interrupted")
 
-	model := llmtest.New(t)
+func TestRunFailsWhenContextIsDone(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cause   error
+		wantErr error
+	}{
+		"cancelled":          {wantErr: context.Canceled},
+		"cancelled with why": {cause: errInterrupted, wantErr: errInterrupted},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancelCause(t.Context())
+			cancel(tc.cause)
+
+			model := llmtest.New(t)
+			a := &agent.Agent{Model: model, ModelID: "model-a"}
+
+			events := slices.Collect(a.Run(ctx, agent.Turn{Input: &input}))
+
+			failed := last[agent.Failed](t, events)
+			require.ErrorIs(t, failed.Err, tc.wantErr)
+			assert.Equal(t, []llm.Message{input}, failed.Messages)
+		})
+	}
+}
+
+func TestRunKeepsTextWhenInterrupted(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(t.Context())
+	defer cancel(nil)
+
+	model := llmtest.New(t, llmtest.Events(
+		llm.TextDelta{Text: "The answer"},
+		llm.TextDelta{Text: " is 4."},
+		llm.Done{Response: &llm.Response{Message: reply("The answer is 4.")}},
+	))
 	a := &agent.Agent{Model: model, ModelID: "model-a"}
 
-	events := slices.Collect(a.Run(ctx, agent.Turn{Input: &input}))
+	// Interrupted, as by Esc, once the first text is shown.
+	var events []agent.Event
+	for ev := range a.Run(ctx, agent.Turn{Input: &input}) {
+		events = append(events, ev)
+		if _, ok := ev.(agent.TextDelta); ok {
+			cancel(errInterrupted)
+		}
+	}
 
 	failed := last[agent.Failed](t, events)
-	require.ErrorIs(t, failed.Err, context.Canceled)
-	assert.Equal(t, []llm.Message{input}, failed.Messages)
+	require.ErrorIs(t, failed.Err, errInterrupted)
+	assert.Equal(t, []llm.Message{input, reply("The answer")}, failed.Messages, "the text the caller saw is kept")
+	assert.Equal(t, added(events), failed.Messages)
 }
 
 func TestRunSkipsToolsWhenContextIsDone(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+	ctx, cancel := context.WithCancelCause(t.Context())
+	defer cancel(nil)
 
 	// The first call cancels the turn, so the second never runs.
 	calls := []llm.ToolCall{
@@ -350,7 +399,7 @@ func TestRunSkipsToolsWhenContextIsDone(t *testing.T) {
 		{ID: "call_2", Name: "cancel", Arguments: `{}`},
 	}
 	model := llmtest.New(t, llmtest.ToolCalls(calls...))
-	tool := &cancelTool{cancel: cancel}
+	tool := &cancelTool{cancel: func() { cancel(errInterrupted) }}
 	a := &agent.Agent{Model: model, ModelID: "model-a", Tools: []agent.Tool{tool}}
 
 	events := slices.Collect(a.Run(ctx, agent.Turn{Input: &input}))
@@ -360,12 +409,12 @@ func TestRunSkipsToolsWhenContextIsDone(t *testing.T) {
 
 	// Every call has a result, so the history is still valid to store.
 	failed := last[agent.Failed](t, events)
-	require.ErrorIs(t, failed.Err, context.Canceled)
+	require.ErrorIs(t, failed.Err, errInterrupted)
 	assert.Equal(t, []llm.Message{
 		input,
 		callsReply(calls...),
 		toolMessage("call_1", "cancelled"),
-		toolMessage("call_2", "cancel was not run: context canceled"),
+		toolMessage("call_2", "cancel was not run: interrupted"),
 	}, failed.Messages)
 	assert.Equal(t, added(events), failed.Messages)
 	assert.Len(t, model.Requests(), 1)

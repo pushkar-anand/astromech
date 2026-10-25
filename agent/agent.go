@@ -49,9 +49,10 @@ type (
 		Stream(ctx context.Context, req llm.Request) iter.Seq[llm.Event]
 	}
 
-	// Tool is something the model can call. A panic in Call becomes an
-	// error result for the model; a panic in a goroutine Call starts cannot
-	// be recovered, and crashes the program.
+	// Tool is something the model can call. Call must return soon after
+	// ctx is done: the turn cannot stop while a call runs. A panic in Call
+	// becomes an error result for the model; a panic in a goroutine Call
+	// starts cannot be recovered, and crashes the program.
 	Tool interface {
 		Def() llm.Tool  // name, description, schema, as sent to the model
 		ReadOnly() bool // changes nothing; used by approvals later
