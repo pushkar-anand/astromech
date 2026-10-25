@@ -62,9 +62,7 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 			tools:      tools,
 			toolsMap:   toolsMap,
 			input:      turn.Input,
-			history:    slices.Clone(turn.History),
-			current:    make([]llm.Message, 0),
-			usage:      llm.Usage{},
+			history:    slices.Clone(turn.History), // stored for the turn; the caller may edit theirs meanwhile
 			roundLimit: cmp.Or(a.MaxRounds, defaultMaxRounds),
 		}
 

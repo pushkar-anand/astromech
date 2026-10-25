@@ -6,6 +6,8 @@ import (
 	"github.com/pushkar-anand/astromech/llm"
 )
 
+// run is the state of one call to Run. It lives for one turn and is never
+// shared, which is why it can hold the turn's ctx and yield.
 type run struct {
 	ctx   context.Context
 	agent *Agent
@@ -17,58 +19,23 @@ type run struct {
 
 	input   *llm.Message
 	history []llm.Message
-	current []llm.Message
+	current []llm.Message // what this turn added; Done and Failed report it
 
 	usage llm.Usage
 
 	roundLimit int
 }
 
+// loop runs the turn: the input, then rounds until the model answers or
+// the round limit is reached.
 func (r *run) loop() {
 	if !r.add(r.input) {
 		return
 	}
 
 	for i := 0; r.roundLimit < 0 || i < r.roundLimit; i++ {
-		var send []llm.Message
-
-		if r.agent.System != "" {
-			send = append(send, r.system())
-		}
-
-		send = append(send, r.history...)
-		send = append(send, r.current...)
-
-		request := llm.Request{
-			Model:    r.agent.ModelID,
-			Messages: send,
-			Tools:    r.tools,
-		}
-
-		var response *llm.Response
-
-		for event := range r.agent.Model.Stream(r.ctx, request) {
-			switch e := event.(type) {
-			case llm.TextDelta:
-				if !r.yield(TextDelta{Text: e.Text}) {
-					return
-				}
-			case llm.ReasoningDelta:
-				if !r.yield(ReasoningDelta{Text: e.Text}) {
-					return
-				}
-			case llm.Failed:
-				r.yield(Failed{Err: e.Err, Messages: r.current, Usage: r.usage})
-				return
-			case llm.Done:
-				r.usage = r.usage.Add(e.Response.Usage)
-				response = e.Response
-			}
-		}
-
-		// llm.Client always ends in Done or Failed; other models may not.
-		if response == nil {
-			r.yield(Failed{Err: llm.ErrIncompleteStream, Messages: r.current, Usage: r.usage})
+		response, ok := r.round(r.request())
+		if !ok {
 			return
 		}
 
@@ -89,13 +56,64 @@ func (r *run) loop() {
 	r.done(StopMaxRounds)
 }
 
-func (r *run) system() llm.Message {
-	return llm.Message{
-		Role:    llm.RoleSystem,
-		Content: r.agent.System,
+// request is what this round sends: the system prompt, the history and
+// the turn so far. It is rebuilt every round, never stored.
+func (r *run) request() llm.Request {
+	var send []llm.Message
+
+	if r.agent.System != "" {
+		send = append(send, llm.Message{
+			Role:    llm.RoleSystem,
+			Content: r.agent.System,
+		})
+	}
+
+	send = append(send, r.history...)
+	send = append(send, r.current...)
+
+	return llm.Request{
+		Model:    r.agent.ModelID,
+		Messages: send,
+		Tools:    r.tools,
 	}
 }
 
+// round streams one reply to the caller, adds its usage, and returns it.
+// It is false when the turn is over: the caller stopped, or the model
+// failed, which round has already reported.
+func (r *run) round(request llm.Request) (*llm.Response, bool) {
+	var response *llm.Response
+
+	for event := range r.agent.Model.Stream(r.ctx, request) {
+		switch e := event.(type) {
+		case llm.TextDelta:
+			if !r.yield(TextDelta{Text: e.Text}) {
+				return nil, false
+			}
+		case llm.ReasoningDelta:
+			if !r.yield(ReasoningDelta{Text: e.Text}) {
+				return nil, false
+			}
+		case llm.Failed:
+			r.fail(e.Err)
+			return nil, false
+		case llm.Done:
+			r.usage = r.usage.Add(e.Response.Usage)
+			response = e.Response
+		}
+	}
+
+	// llm.Client always ends in Done or Failed; other models may not.
+	if response == nil {
+		r.fail(llm.ErrIncompleteStream)
+		return nil, false
+	}
+
+	return response, true
+}
+
+// add appends msg to the turn and reports it. A nil msg adds nothing. It
+// is false when the caller stopped.
 func (r *run) add(msg *llm.Message) bool {
 	if msg == nil {
 		return true
@@ -106,6 +124,7 @@ func (r *run) add(msg *llm.Message) bool {
 	return r.yield(MessageAdded{Message: *msg})
 }
 
+// done ends the turn with reason. The caller returns after it.
 func (r *run) done(reason Stop) {
 	r.yield(Done{
 		Stop:     reason,
@@ -114,7 +133,14 @@ func (r *run) done(reason Stop) {
 	})
 }
 
-func (r *run) callAllTools(toolCalls []llm.ToolCall) (ok bool) {
+// fail ends the turn with err. The caller returns after it.
+func (r *run) fail(err error) {
+	r.yield(Failed{Err: err, Messages: r.current, Usage: r.usage})
+}
+
+// callAllTools runs a round's tool calls in order, adding each result to
+// the turn. It is false when the caller stopped.
+func (r *run) callAllTools(toolCalls []llm.ToolCall) bool {
 	for _, toolCall := range toolCalls {
 		if !r.yield(ToolStarted{Call: toolCall}) {
 			return false
