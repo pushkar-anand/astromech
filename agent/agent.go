@@ -96,7 +96,16 @@ func (a *Agent) tools() ([]llm.Tool, map[string]Tool, error) {
 // callTool runs the tool toolCall names. Whatever goes wrong becomes an
 // error result, naming the tool and showing what the model sent, so the
 // model can correct its next call.
-func callTool(ctx context.Context, toolsMap map[string]Tool, toolCall llm.ToolCall) Result {
+func callTool(ctx context.Context, toolsMap map[string]Tool, toolCall llm.ToolCall) (result Result) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = Result{
+				Content: fmt.Sprintf("panic in tool %q: %v", toolCall.Name, r),
+				IsError: true,
+			}
+		}
+	}()
+
 	t, ok := toolsMap[toolCall.Name]
 	if !ok {
 		names := cmp.Or(strings.Join(slices.Sorted(maps.Keys(toolsMap)), ", "), "none")
