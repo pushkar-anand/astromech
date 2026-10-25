@@ -301,11 +301,15 @@ func TestRunToolErrorResults(t *testing.T) {
 	}{
 		"unknown tool": {
 			call: llm.ToolCall{ID: "call_1", Name: "sub", Arguments: `{}`},
-			want: `there is no tool named "sub"; the tools are: add, fail`,
+			want: `there is no tool named "sub"; the tools are: add, fail, panic`,
 		},
 		"invalid JSON": {
 			call: llm.ToolCall{ID: "call_1", Name: "add", Arguments: `{"a":2,`},
 			want: `the arguments for add are not valid JSON: {"a":2,`,
+		},
+		"tool panics": {
+			call: llm.ToolCall{ID: "call_1", Name: "panic", Arguments: `{}`},
+			want: `panic in tool "panic": boom`,
 		},
 		"tool fails": {
 			call: llm.ToolCall{ID: "call_1", Name: "fail", Arguments: `{}`},
@@ -314,7 +318,7 @@ func TestRunToolErrorResults(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			model := llmtest.New(t, llmtest.ToolCalls(tc.call), llmtest.Text("sorry"))
-			a := &agent.Agent{Model: model, ModelID: "model-a", Tools: []agent.Tool{addTool{}, failTool{}}}
+			a := &agent.Agent{Model: model, ModelID: "model-a", Tools: []agent.Tool{addTool{}, failTool{}, panicTool{}}}
 
 			events := run(t, a, agent.Turn{Input: &input})
 
@@ -362,6 +366,16 @@ func (failTool) ReadOnly() bool { return true }
 
 func (failTool) Call(context.Context, jsontext.Value) (agent.Result, error) {
 	return agent.Result{}, errors.New("boom")
+}
+
+// panicTool always panics.
+type panicTool struct{}
+
+func (panicTool) Def() llm.Tool  { return llm.Tool{Name: "panic", Description: "Always panics."} }
+func (panicTool) ReadOnly() bool { return true }
+
+func (panicTool) Call(context.Context, jsontext.Value) (agent.Result, error) {
+	panic("boom")
 }
 
 // countingTool counts its calls.

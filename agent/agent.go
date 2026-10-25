@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"os"
+	"runtime/debug"
 	"slices"
 	"strings"
 
@@ -93,12 +95,18 @@ func (a *Agent) tools() ([]llm.Tool, map[string]Tool, error) {
 	return tools, toolsMap, nil
 }
 
-// callTool runs the tool toolCall names. Whatever goes wrong becomes an
-// error result, naming the tool and showing what the model sent, so the
-// model can correct its next call.
+// callTool runs the tool toolCall names. Whatever goes wrong, a panic
+// included, becomes an error result, naming the tool and showing what the
+// model sent, so the model can correct its next call. With
+// DEBUG_ASTROMECH=true, a panic's stack is printed to stdout, since the
+// model never sees it.
 func callTool(ctx context.Context, toolsMap map[string]Tool, toolCall llm.ToolCall) (result Result) {
 	defer func() {
 		if r := recover(); r != nil {
+			if os.Getenv("DEBUG_ASTROMECH") == "true" {
+				fmt.Fprintf(os.Stdout, "agent: panic in tool %q: %v\n%s", toolCall.Name, r, debug.Stack())
+			}
+
 			result = Result{
 				Content: fmt.Sprintf("panic in tool %q: %v", toolCall.Name, r),
 				IsError: true,
