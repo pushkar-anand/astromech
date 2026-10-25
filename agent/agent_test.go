@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"errors"
+	"fmt"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -67,6 +69,17 @@ func withUsage(turn llmtest.Turn, usage llm.Usage) llmtest.Turn {
 
 func addCall(id string) llm.ToolCall {
 	return llm.ToolCall{ID: id, Name: "add", Arguments: `{"a":2,"b":2}`}
+}
+
+// rounds is n rounds of one add call each, with new arguments every round:
+// a model making progress, not repeating itself.
+func rounds(n int) []llmtest.Turn {
+	turns := make([]llmtest.Turn, n)
+	for i := range turns {
+		turns[i] = llmtest.ToolCalls(llm.ToolCall{ID: "call_1", Name: "add", Arguments: fmt.Sprintf(`{"a":%d,"b":2}`, i)})
+	}
+
+	return turns
 }
 
 func reply(text string) llm.Message {
@@ -175,12 +188,7 @@ func TestRunStopsAtMaxRounds(t *testing.T) {
 		"default": {maxRounds: 0, want: 25},
 	} {
 		t.Run(name, func(t *testing.T) {
-			turns := make([]llmtest.Turn, tc.want)
-			for i := range turns {
-				turns[i] = llmtest.ToolCalls(addCall("call_1"))
-			}
-
-			model := llmtest.New(t, turns...)
+			model := llmtest.New(t, rounds(tc.want)...)
 			a := &agent.Agent{Model: model, ModelID: "model-a", Tools: []agent.Tool{addTool{}}, MaxRounds: tc.maxRounds}
 
 			events := run(t, a, agent.Turn{Input: &input})
@@ -196,11 +204,7 @@ func TestRunStopsAtMaxRounds(t *testing.T) {
 
 func TestRunNegativeMaxRoundsHasNoLimit(t *testing.T) {
 	// More rounds than the default limit, then an answer.
-	turns := make([]llmtest.Turn, 30)
-	for i := range turns {
-		turns[i] = llmtest.ToolCalls(addCall("call_1"))
-	}
-	turns = append(turns, llmtest.Text("4"))
+	turns := append(rounds(30), llmtest.Text("4"))
 
 	model := llmtest.New(t, turns...)
 	a := &agent.Agent{Model: model, ModelID: "model-a", Tools: []agent.Tool{addTool{}}, MaxRounds: -1}
@@ -209,6 +213,90 @@ func TestRunNegativeMaxRoundsHasNoLimit(t *testing.T) {
 
 	assert.Equal(t, agent.StopAnswered, done.Stop)
 	assert.Len(t, model.Requests(), 31)
+}
+
+const nudge = "4\n\n(add has returned this %d times for these arguments, and will again: try something else, or answer.)"
+
+func TestRunStopsWhenRepeating(t *testing.T) {
+	for name, tc := range map[string]struct {
+		maxRepeats int
+		want       int // rounds before the stop
+	}{
+		"set":     {maxRepeats: 1, want: 2},
+		"default": {maxRepeats: 0, want: 4},
+	} {
+		t.Run(name, func(t *testing.T) {
+			turns := make([]llmtest.Turn, tc.want)
+			for i := range turns {
+				turns[i] = llmtest.ToolCalls(addCall("call_1"))
+			}
+
+			model := llmtest.New(t, turns...)
+			a := &agent.Agent{Model: model, ModelID: "model-a", Tools: []agent.Tool{addTool{}}, MaxRepeats: tc.maxRepeats}
+
+			events := run(t, a, agent.Turn{Input: &input})
+
+			done := last[agent.Done](t, events)
+			assert.Equal(t, agent.StopRepeating, done.Stop)
+			assert.Equal(t, added(events), done.Messages)
+			assert.Len(t, model.Requests(), tc.want)
+
+			// The model was told once, the round before the stop.
+			n := tc.want - 1
+			msgs := done.Messages
+			assert.Equal(t, toolMessage("call_1", fmt.Sprintf(nudge, n)), msgs[2*n])
+			assert.Equal(t, toolMessage("call_1", "4"), msgs[len(msgs)-1], "the stop ends on a result, ready to resume")
+		})
+	}
+}
+
+func TestRunStopsWhenRepeatingInOneRound(t *testing.T) {
+	calls := []llm.ToolCall{addCall("call_1"), addCall("call_2"), addCall("call_3"), addCall("call_4"), addCall("call_5")}
+	model := llmtest.New(t, llmtest.ToolCalls(calls...))
+	a := &agent.Agent{Model: model, ModelID: "model-a", Tools: []agent.Tool{addTool{}}}
+
+	done := last[agent.Done](t, run(t, a, agent.Turn{Input: &input}))
+
+	// Every call still runs and has a result; the turn stops after the round.
+	assert.Equal(t, agent.StopRepeating, done.Stop)
+	assert.Equal(t, []llm.Message{
+		input,
+		callsReply(calls...),
+		toolMessage("call_1", "4"),
+		toolMessage("call_2", "4"),
+		toolMessage("call_3", fmt.Sprintf(nudge, 3)),
+		toolMessage("call_4", "4"),
+		toolMessage("call_5", "4"),
+	}, done.Messages)
+}
+
+func TestRunRepeatsAreNotLoops(t *testing.T) {
+	for name, tc := range map[string]struct {
+		maxRepeats int
+		tool       agent.Tool
+	}{
+		"new results": {tool: &tickTool{}},
+		"no limit":    {maxRepeats: -1, tool: addTool{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			call := llm.ToolCall{ID: "call_1", Name: tc.tool.Def().Name, Arguments: `{"a":2,"b":2}`}
+			turns := make([]llmtest.Turn, 6)
+			for i := range turns {
+				turns[i] = llmtest.ToolCalls(call)
+			}
+			turns = append(turns, llmtest.Text("done"))
+
+			model := llmtest.New(t, turns...)
+			a := &agent.Agent{Model: model, ModelID: "model-a", Tools: []agent.Tool{tc.tool}, MaxRepeats: tc.maxRepeats}
+
+			events := run(t, a, agent.Turn{Input: &input})
+
+			assert.Equal(t, agent.StopAnswered, last[agent.Done](t, events).Stop)
+			for _, msg := range added(events) {
+				assert.NotContains(t, msg.Content, "will again")
+			}
+		})
+	}
 }
 
 func TestRunFails(t *testing.T) {
@@ -418,6 +506,17 @@ func (*countingTool) ReadOnly() bool { return true }
 func (c *countingTool) Call(context.Context, jsontext.Value) (agent.Result, error) {
 	c.calls++
 	return agent.Result{Content: "4"}, nil
+}
+
+// tickTool returns its call count, so a repeated call gets a new result.
+type tickTool struct{ calls int }
+
+func (*tickTool) Def() llm.Tool  { return llm.Tool{Name: "tick", Description: "Counts its calls."} }
+func (*tickTool) ReadOnly() bool { return true }
+
+func (c *tickTool) Call(context.Context, jsontext.Value) (agent.Result, error) {
+	c.calls++
+	return agent.Result{Content: strconv.Itoa(c.calls)}, nil
 }
 
 // cancelTool cancels the turn it runs in.

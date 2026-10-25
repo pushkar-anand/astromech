@@ -15,7 +15,10 @@ import (
 	"github.com/pushkar-anand/astromech/llm"
 )
 
-const defaultMaxRounds = 25
+const (
+	defaultMaxRounds  = 25
+	defaultMaxRepeats = 3
+)
 
 type (
 	Result struct {
@@ -29,6 +32,10 @@ type (
 		System    string
 		Tools     []Tool
 		MaxRounds int // Max rounds of calls, zero means defaultRounds, negative means no limit
+		// MaxRepeats is how often one call may return one result in a turn
+		// before the model is told it will not change; one more and the turn
+		// stops. Zero means defaultMaxRepeats, negative means no limit.
+		MaxRepeats int
 	}
 
 	Turn struct {
@@ -61,14 +68,16 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 		}
 
 		r := run{
-			ctx:        ctx,
-			agent:      a,
-			yield:      yield,
-			tools:      tools,
-			toolsMap:   toolsMap,
-			input:      turn.Input,
-			history:    slices.Clone(turn.History), // stored for the turn; the caller may edit theirs meanwhile
-			roundLimit: cmp.Or(a.MaxRounds, defaultMaxRounds),
+			ctx:         ctx,
+			agent:       a,
+			yield:       yield,
+			tools:       tools,
+			toolsMap:    toolsMap,
+			input:       turn.Input,
+			history:     slices.Clone(turn.History), // stored for the turn; the caller may edit theirs meanwhile
+			roundLimit:  cmp.Or(a.MaxRounds, defaultMaxRounds),
+			repeats:     make(map[repeat]int),
+			repeatLimit: cmp.Or(a.MaxRepeats, defaultMaxRepeats),
 		}
 
 		r.loop()

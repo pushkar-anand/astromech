@@ -9,6 +9,7 @@ type Stop string
 const (
 	StopAnswered  Stop = "answered"
 	StopMaxRounds Stop = "max_rounds"
+	StopRepeating Stop = "repeating" // a call kept returning the same result
 )
 
 type (

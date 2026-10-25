@@ -25,10 +25,17 @@ type run struct {
 	usage llm.Usage
 
 	roundLimit int
+
+	repeats     map[repeat]int // how often each call returned each result
+	repeatLimit int
+	repeating   bool // a call went past repeatLimit; stop after this round
 }
 
-// loop runs the turn: the input, then rounds until the model answers or
-// the round limit is reached.
+// repeat is one tool call and what it returned, as loop detection counts it.
+type repeat struct{ name, args, content string }
+
+// loop runs the turn: the input, then rounds until the model answers, a
+// call keeps returning the same result, or the round limit is reached.
 func (r *run) loop() {
 	if !r.add(r.input) {
 		return
@@ -50,6 +57,11 @@ func (r *run) loop() {
 		}
 
 		if ok := r.callAllTools(response.Message.ToolCalls); !ok {
+			return
+		}
+
+		if r.repeating {
+			r.done(StopRepeating)
 			return
 		}
 	}
@@ -153,7 +165,7 @@ func (r *run) callAllTools(toolCalls []llm.ToolCall) bool {
 			return false
 		}
 
-		result := callTool(r.ctx, r.toolsMap, toolCall)
+		result := r.noteRepeat(toolCall, callTool(r.ctx, r.toolsMap, toolCall))
 
 		if !r.yield(ToolFinished{Call: toolCall, Result: result}) {
 			return false
@@ -190,4 +202,25 @@ func (r *run) skip(toolCalls []llm.ToolCall, err error) {
 	}
 
 	r.fail(err)
+}
+
+// noteRepeat counts toolCall and its result. At repeatLimit it tells the
+// model the result will not change; past it, the turn stops once every call
+// this round has a result, so the history stays valid to resume.
+func (r *run) noteRepeat(toolCall llm.ToolCall, result Result) Result {
+	if r.repeatLimit < 0 {
+		return result
+	}
+
+	key := repeat{name: toolCall.Name, args: toolCall.Arguments, content: result.Content}
+	r.repeats[key]++
+
+	switch n := r.repeats[key]; {
+	case n == r.repeatLimit:
+		result.Content += fmt.Sprintf("\n\n(%s has returned this %d times for these arguments, and will again: try something else, or answer.)", toolCall.Name, n)
+	case n > r.repeatLimit:
+		r.repeating = true
+	}
+
+	return result
 }
