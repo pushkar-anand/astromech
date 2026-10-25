@@ -253,22 +253,45 @@ func TestRunFailsWhenContextIsDone(t *testing.T) {
 }
 
 func TestRunStopsWhenCallerStops(t *testing.T) {
-	// Only the first turn is used: the caller stops at the call.
-	model := llmtest.New(t, llmtest.ToolCalls(addCall("call_1")))
-	tool := &countingTool{}
-	a := &agent.Agent{Model: model, ModelID: "model-a", Tools: []agent.Tool{tool}}
+	// A turn with one tool call, stopped at each of its events in turn: no
+	// panic from yielding again, no request or tool call after the stop.
+	turns := []llmtest.Turn{llmtest.ToolCalls(addCall("call_1")), llmtest.Text("4")}
 
-	var events []agent.Event
-	for ev := range a.Run(t.Context(), agent.Turn{Input: &input}) {
-		events = append(events, ev)
-		if _, ok := ev.(agent.ToolStarted); ok {
-			break
-		}
+	for n, tc := range []struct {
+		event    string      // the event stopped at, for the subtest name
+		last     agent.Event // its type
+		requests int
+		calls    int
+	}{
+		{event: "input added", last: agent.MessageAdded{}},
+		{event: "calls added", last: agent.MessageAdded{}, requests: 1},
+		{event: "tool started", last: agent.ToolStarted{}, requests: 1},
+		{event: "tool finished", last: agent.ToolFinished{}, requests: 1, calls: 1},
+		{event: "result added", last: agent.MessageAdded{}, requests: 1, calls: 1},
+		{event: "text", last: agent.TextDelta{}, requests: 2, calls: 1},
+		{event: "answer added", last: agent.MessageAdded{}, requests: 2, calls: 1},
+		{event: "done", last: agent.Done{}, requests: 2, calls: 1},
+	} {
+		t.Run(tc.event, func(t *testing.T) {
+			// Only the turns used before the stop: llmtest fails on the rest.
+			model := llmtest.New(t, turns[:tc.requests]...)
+			tool := &countingTool{}
+			a := &agent.Agent{Model: model, ModelID: "model-a", Tools: []agent.Tool{tool}}
+
+			var events []agent.Event
+			for ev := range a.Run(t.Context(), agent.Turn{Input: &input}) {
+				events = append(events, ev)
+				if len(events) == n+1 {
+					break
+				}
+			}
+
+			require.Len(t, events, n+1)
+			assert.IsType(t, tc.last, events[n])
+			assert.Len(t, model.Requests(), tc.requests)
+			assert.Equal(t, tc.calls, tool.calls)
+		})
 	}
-
-	assert.IsType(t, agent.ToolStarted{}, events[len(events)-1])
-	assert.Zero(t, tool.calls, "the tool does not run after the caller stops")
-	assert.Len(t, model.Requests(), 1)
 }
 
 func TestRunToolErrorResults(t *testing.T) {
