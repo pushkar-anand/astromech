@@ -42,6 +42,9 @@ type (
 		Stream(ctx context.Context, req llm.Request) iter.Seq[llm.Event]
 	}
 
+	// Tool is something the model can call. A panic in Call becomes an
+	// error result for the model; a panic in a goroutine Call starts cannot
+	// be recovered, and crashes the program.
 	Tool interface {
 		Def() llm.Tool  // name, description, schema, as sent to the model
 		ReadOnly() bool // changes nothing; used by approvals later
@@ -104,11 +107,11 @@ func callTool(ctx context.Context, toolsMap map[string]Tool, toolCall llm.ToolCa
 	defer func() {
 		if r := recover(); r != nil {
 			if os.Getenv("DEBUG_ASTROMECH") == "true" {
-				fmt.Fprintf(os.Stdout, "agent: panic in tool %q: %v\n%s", toolCall.Name, r, debug.Stack())
+				fmt.Fprintf(os.Stdout, "agent: %s panicked: %v\n%s", toolCall.Name, r, debug.Stack())
 			}
 
 			result = Result{
-				Content: fmt.Sprintf("panic in tool %q: %v", toolCall.Name, r),
+				Content: fmt.Sprintf("%s panicked: %v", toolCall.Name, r),
 				IsError: true,
 			}
 		}

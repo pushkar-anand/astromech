@@ -301,15 +301,15 @@ func TestRunToolErrorResults(t *testing.T) {
 	}{
 		"unknown tool": {
 			call: llm.ToolCall{ID: "call_1", Name: "sub", Arguments: `{}`},
-			want: `there is no tool named "sub"; the tools are: add, fail, panic`,
+			want: `there is no tool named "sub"; the tools are: add, explode, fail`,
 		},
 		"invalid JSON": {
 			call: llm.ToolCall{ID: "call_1", Name: "add", Arguments: `{"a":2,`},
 			want: `the arguments for add are not valid JSON: {"a":2,`,
 		},
 		"tool panics": {
-			call: llm.ToolCall{ID: "call_1", Name: "panic", Arguments: `{}`},
-			want: `panic in tool "panic": boom`,
+			call: llm.ToolCall{ID: "call_1", Name: "explode", Arguments: `{}`},
+			want: "explode panicked: boom",
 		},
 		"tool fails": {
 			call: llm.ToolCall{ID: "call_1", Name: "fail", Arguments: `{}`},
@@ -371,7 +371,7 @@ func (failTool) Call(context.Context, jsontext.Value) (agent.Result, error) {
 // panicTool always panics.
 type panicTool struct{}
 
-func (panicTool) Def() llm.Tool  { return llm.Tool{Name: "panic", Description: "Always panics."} }
+func (panicTool) Def() llm.Tool  { return llm.Tool{Name: "explode", Description: "Always panics."} }
 func (panicTool) ReadOnly() bool { return true }
 
 func (panicTool) Call(context.Context, jsontext.Value) (agent.Result, error) {
