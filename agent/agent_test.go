@@ -526,6 +526,19 @@ func TestRunRejectsDuplicateTools(t *testing.T) {
 	assert.Empty(t, model.Requests())
 }
 
+func TestRunRejectsUnknownMode(t *testing.T) {
+	model := llmtest.New(t) // no turns: any request fails the test
+	a := &agent.Agent{Model: model, ModelID: "model-a"}
+
+	events := run(t, a, agent.Turn{Input: &input, Mode: "yolo"})
+
+	// Failed before anything was added, so the caller has nothing to store.
+	require.Len(t, events, 1)
+	failed := last[agent.Failed](t, events)
+	assert.EqualError(t, failed.Err, `agent: unknown mode "yolo"`)
+	assert.Empty(t, failed.Messages)
+}
+
 // failTool always fails.
 type failTool struct{}
 

@@ -31,6 +31,9 @@ type run struct {
 	repeats     map[repeat]int // how often each call returned each result
 	repeatLimit int
 	repeating   bool // a call went past repeatLimit; stop after this round
+
+	mode      Mode
+	decisions map[string]Verdict // the turn's, by call ID
 }
 
 // repeat is one tool call and what it returned, as loop detection counts it.

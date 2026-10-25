@@ -39,8 +39,10 @@ type (
 	}
 
 	Turn struct {
-		History []llm.Message
-		Input   *llm.Message
+		History   []llm.Message
+		Input     *llm.Message
+		Mode      Mode               // which calls run without a person; zero is ModeAllowReadOnly
+		Decisions map[string]Verdict // a person's verdicts on waiting calls, by call ID
 	}
 )
 
@@ -68,6 +70,13 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 			return
 		}
 
+		mode := cmp.Or(turn.Mode, ModeAllowReadOnly)
+
+		if !mode.valid() {
+			yield(Failed{Err: fmt.Errorf("agent: unknown mode %q", mode)})
+			return
+		}
+
 		r := run{
 			ctx:         ctx,
 			agent:       a,
@@ -79,6 +88,8 @@ func (a *Agent) Run(ctx context.Context, turn Turn) iter.Seq[Event] {
 			roundLimit:  cmp.Or(a.MaxRounds, defaultMaxRounds),
 			repeats:     make(map[repeat]int),
 			repeatLimit: cmp.Or(a.MaxRepeats, defaultMaxRepeats),
+			mode:        mode,
+			decisions:   maps.Clone(turn.Decisions),
 		}
 
 		r.loop()
