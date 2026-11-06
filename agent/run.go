@@ -246,3 +246,11 @@ func (r *run) noteRepeat(toolCall llm.ToolCall, result Result) Result {
 
 	return result
 }
+
+func (r *run) allowedToolRun() bool {
+	if r.mode == ModeBypass {
+		return true
+	}
+
+	return false
+}
